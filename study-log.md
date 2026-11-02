@@ -22,6 +22,31 @@
 
 **현재 구성 (최신)**: Prometheus v3.5.0 · node-exporter v1.9.1 · Grafana 12.1.0 · cAdvisor 0.56.1 (ghcr.io) — 최종 compose 파일은 [Day 4](#day-4--컨테이너-메트릭) 참고
 
+### 접속 주소 (로컬, `docker compose up -d` 상태에서)
+
+| 서비스 | 주소 | 용도 |
+|---|---|---|
+| Prometheus | http://localhost:9090 | PromQL 쿼리 (Query 탭) |
+| Prometheus Targets | http://localhost:9090/targets | 수집 대상 UP/DOWN 확인 |
+| Prometheus Alerts | http://localhost:9090/alerts | 알림 규칙 상태 (Day 5) |
+| Grafana | http://localhost:3000 | 대시보드 (admin / admin) |
+| node-exporter | http://localhost:9100/metrics | 호스트 지표 원본 |
+| cAdvisor | http://localhost:8080 | 컨테이너 지표 웹 UI (`/metrics`는 원본) |
+| Alertmanager | http://localhost:9093 | 알림 수신 확인 (Day 5) |
+
+### 참고 사이트
+
+| 주제 | 주소 |
+|---|---|
+| Prometheus 문서 | https://prometheus.io/docs/ |
+| Prometheus + cAdvisor 가이드 | https://prometheus.io/docs/guides/cadvisor/ |
+| Grafana 대시보드 1860 (Node Exporter Full) | https://grafana.com/grafana/dashboards/1860 |
+| cAdvisor 저장소·릴리스 | https://github.com/google/cadvisor/releases |
+| cAdvisor × Docker 29 containerd-snapshotter 이슈 | https://github.com/google/cadvisor/issues/3643 |
+| kube-prometheus-stack 차트 (2주차) | https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack |
+| k3d | https://k3d.io |
+| OrbStack | https://orbstack.dev |
+
 ---
 
 ## 2026-10-30 (금) · Day 1 ~ Day 2·3
@@ -45,7 +70,7 @@
 - **lab VM** (`seongjong@lab`, `orb -m lab`으로 접속): systemd, ufw, 계정 관리 같은 리눅스 운영 실습용. 패키지 설치는 `apt`
 - VM 안에서 `brew`가 안 되는 건 정상 (리눅스는 `apt`)
 
-![Ubuntu VM 생성 및 접속](images/1030/02-docker-context-orbstack-vm.png)
+![Ubuntu VM 생성 및 접속](screenshots/1030/02-docker-context-orbstack-vm.png)
 *`orb create ubuntu lab` → `orb -m lab`으로 접속, Ubuntu 26.04.1 / aarch64 확인*
 
 #### 확인 명령
@@ -57,7 +82,7 @@ helm version
 k3d version
 ```
 
-![Day 1 도구 설치 완료](images/1030/03-day1-tools-hello-world.png)
+![Day 1 도구 설치 완료](screenshots/1030/03-day1-tools-hello-world.png)
 *kubectl·helm·k3d 설치 후 hello-world 성공, 각 도구 버전 확인*
 
 ---
@@ -160,7 +185,7 @@ docker compose ps
 - http://localhost:9090/targets 에서 `prometheus`, `node` 둘 다 **UP** 확인
 - OrbStack 앱에서 컨테이너 3개가 `week1` 그룹으로 묶여 보임 → compose 프로젝트 이름은 **폴더 이름**
 
-![compose 실행 결과](images/1030/06-compose-up-orbstack.png)
+![compose 실행 결과](screenshots/1030/06-compose-up-orbstack.png)
 *`docker compose ps`로 컨테이너 3개 Up 확인, OrbStack 앱에서 `week1` 그룹으로 표시*
 
 #### 핵심 개념: 서비스 이름으로 통신되는 이유
@@ -172,7 +197,7 @@ Grafana 데이터소스에 `localhost:9090`이 아니라 **`http://prometheus:90
 - 그래서 `prometheus.yml`의 `node-exporter:9100`, Grafana의 `prometheus:9090`이 동작한다.
 - 반대로 브라우저(맥)에서 접속할 때는 `ports`로 열어둔 `localhost:9090`, `localhost:3000`을 쓴다.
 
-![Grafana 데이터소스 연결](images/1030/11-grafana-datasource.png)
+![Grafana 데이터소스 연결](screenshots/1030/11-grafana-datasource.png)
 *Grafana 데이터소스에 `http://prometheus:9090` 연결*
 
 #### PromQL 쿼리
@@ -188,7 +213,7 @@ Grafana 데이터소스에 `localhost:9090`이 아니라 **`http://prometheus:90
 - `{mode="idle"}` — 라벨로 원하는 시계열만 골라냄
 - 지표 값은 **맥이 아니라 OrbStack 리눅스 VM 기준**. 메모리 총량이 맥 24GB보다 작게 나오는 게 정상
 
-![메모리 가용률 그래프](images/1030/08-memory-available-graph.png)
+![메모리 가용률 그래프](screenshots/1030/08-memory-available-graph.png)
 *PromQL로 조회한 메모리 가용률. Y축이 93.2~93.9 사이로 확대돼 있어 출렁이는 것처럼 보임*
 
 #### Grafana 대시보드 `week1 서버 모니터링`
@@ -199,10 +224,10 @@ Grafana 데이터소스에 `localhost:9090`이 아니라 **`http://prometheus:90
 | 메모리 사용률 | Time series | Unit `Percent (0-100)`, Min 0 / Max 100 |
 | 디스크 사용률 | Gauge | Unit `Percent (0-100)`, Min 0 / Max 100, Thresholds 70(노랑)·90(빨강) |
 
-![CPU 패널 편집](images/1030/12-grafana-cpu-panel-edit.png)
+![CPU 패널 편집](screenshots/1030/12-grafana-cpu-panel-edit.png)
 *패널 편집 화면. Code 모드로 쿼리 입력, 오른쪽 Standard options에서 Unit 지정*
 
-![완성된 대시보드](images/1030/14-grafana-dashboard-gauge.png)
+![완성된 대시보드](screenshots/1030/14-grafana-dashboard-gauge.png)
 *디스크 게이지(70/90 임계값) + 메모리·CPU 시계열 패널*
 
 **설계 이유**
@@ -230,7 +255,7 @@ Grafana 데이터소스에 `localhost:9090`이 아니라 **`http://prometheus:90
 curl: (35) LibreSSL/3.3.6: error:1404B42E:SSL routines:ST_CONNECT:tlsv1 alert protocol version
 ```
 
-![brew TLS 에러](images/1030/01-brew-orbstack-tls-error.png)
+![brew TLS 에러](screenshots/1030/01-brew-orbstack-tls-error.png)
 
 - **원인**: Homebrew가 설치 파일을 받을 때 HTTPS 연결 협상(TLS) 단계에서 거부됨. macOS 기본 curl(LibreSSL)과 서버 설정이 안 맞거나, 네트워크가 HTTPS를 막는 경우
 - **해결 방법 후보**: `brew install curl` 후 `export HOMEBREW_FORCE_BREWED_CURL=1`로 Homebrew판 curl 사용 / 공식 사이트에서 dmg 직접 다운로드 / 다른 네트워크(핫스팟)로 시도
@@ -246,7 +271,7 @@ Cannot connect to the Docker daemon at unix:///Users/seongjong/.docker/run/docke
 - **해결**: `docker context use orbstack`
 - **교훈**: Docker Desktop과 OrbStack을 동시에 쓰면 어느 엔진에 컨테이너를 띄웠는지 헷갈림. Docker Desktop은 종료하고 자동 실행 끄기
 
-![docker 컨텍스트 전환](images/1030/04-docker-context-which-kubectl.png)
+![docker 컨텍스트 전환](screenshots/1030/04-docker-context-which-kubectl.png)
 *`orbstack` 컨텍스트로 전환, `which -a kubectl`로 kubectl이 여러 곳에 있음을 확인*
 
 #### 3. kubectl 버전이 brew로 설치한 것과 다르게 나옴
@@ -266,26 +291,26 @@ Cannot connect to the Docker daemon at unix:///Users/seongjong/.docker/run/docke
 - **원인**: zsh는 대화형 터미널에서 `#`을 주석으로 인식하지 않는 게 기본값
 - **해결**: 명령만 한 줄씩 실행. (원하면 `~/.zshrc`에 `setopt interactivecomments` 추가)
 
-![zsh 주석 문제와 kubectl 경로](images/1030/05-kubectl-path-zsh-comment.png)
+![zsh 주석 문제와 kubectl 경로](screenshots/1030/05-kubectl-path-zsh-comment.png)
 *`#` 뒤 글자들이 `ls`의 인자로 들어가 에러. 아래 `ls -l` 결과로 두 kubectl의 실제 위치 확인*
 
 #### 5. 디스크 쿼리 결과가 비어 있음 (`mountpoint="/"`)
 
 - CPU·메모리 쿼리는 되는데 디스크 쿼리만 `Empty query result`
 
-![디스크 쿼리 결과 없음](images/1030/07-disk-query-empty.png)
+![디스크 쿼리 결과 없음](screenshots/1030/07-disk-query-empty.png)
 
 - 조건을 빼고 `node_filesystem_size_bytes`로 전체 목록을 확인:
   - `device="mac"`, `fstype="virtiofs"` (~1TB): OrbStack이 **맥의 디스크를 VM에 공유**한 것. VM 디스크가 아니므로 모니터링 대상 아님
   - `device="/dev/vdb1"`, `fstype="btrfs"`: **OrbStack VM의 실제 디스크**. `/var/lib/docker`, `/var/lib/cni`, `/etc/rancher/node`, `/opt/orbstack-guest/data` 등 여러 곳에 마운트되어 선이 여러 개로 보임
   - **`mountpoint="/"`는 목록에 없음** → 그래서 결과가 비었던 것
 
-![파일시스템 목록](images/1030/09-filesystem-list.png)
+![파일시스템 목록](screenshots/1030/09-filesystem-list.png)
 *위쪽 큰 선(~1TB)은 맥 디스크 공유분(virtiofs), 아래쪽이 VM 실제 디스크(/dev/vdb1, btrfs)*
 
 - **해결**: 컨테이너 이미지·볼륨이 쌓이는 `mountpoint="/var/lib/docker"` 기준으로 쿼리 변경
 
-![/var/lib/docker 기준 디스크 사용률](images/1030/10-disk-var-lib-docker.png)
+![/var/lib/docker 기준 디스크 사용률](screenshots/1030/10-disk-var-lib-docker.png)
 *약 0.29%. Y축이 0.28~0.30으로 확대돼 있어 크게 변하는 것처럼 보이지만 실제로는 거의 변화 없음*
 
 - **교훈**
@@ -304,7 +329,7 @@ Cannot connect to the Docker daemon at unix:///Users/seongjong/.docker/run/docke
 
 - 제목은 "사용률"인데 쿼리는 가용률(약 93%) → 메모리가 거의 꽉 찬 것처럼 보임
 
-![메모리 패널 제목·쿼리 불일치](images/1030/13-grafana-cpu-memory-panels.png)
+![메모리 패널 제목·쿼리 불일치](screenshots/1030/13-grafana-cpu-memory-panels.png)
 *제목은 `메모리 사용률`인데 값은 가용률(약 93%)*
 
 - 수정 과정에서 쿼리와 제목을 둘 다 바꿔 다시 반대로 어긋남 (제목 `메모리 가용률`, 값은 사용률 약 7% — 위 "완성된 대시보드" 스크린샷)
@@ -429,7 +454,7 @@ docker compose ps
 - `docker compose config --quiet`: YAML 문법만 미리 검사. **출력이 없으면 정상**, 들여쓰기가 깨졌으면 몇 번째 줄인지 알려줌. 파일을 통째로 바꿀 때 먼저 확인하는 습관
 - `docker compose restart prometheus`: compose 정의는 그대로고 **설정 파일만** 바뀐 경우 `up -d`가 컨테이너를 다시 만들지 않으므로, 재시작해서 설정을 다시 읽게 함
 
-![compose 반영](images/1102/02-cadvisor-compose-up.png)
+![compose 반영](screenshots/1102/02-cadvisor-compose-up.png)
 *cAdvisor 포함 4개 컨테이너 기동, cadvisor는 `(healthy)`*
 
 #### 컨테이너별 CPU 쿼리
@@ -442,7 +467,7 @@ sum by (image) (rate(container_cpu_usage_seconds_total{name!=""}[1m]))
 - `sum by (image)` — 이미지 이름별로 묶어서 합침. 범례가 짧고 읽기 쉬워짐
 - 우리 환경에서는 `name` 라벨이 컨테이너 **이름이 아니라 ID**로 나와서 `image` 라벨로 구분 (트러블슈팅 8 참고)
 
-![컨테이너별 CPU](images/1102/07-container-cpu-by-image.png)
+![컨테이너별 CPU](screenshots/1102/07-container-cpu-by-image.png)
 *`image` 라벨별로 선이 나뉨 — prometheus, node-exporter 등 컨테이너 단위 구분 성공*
 
 **단위 읽는 법**
@@ -456,9 +481,9 @@ sum by (image) (rate(container_cpu_usage_seconds_total{name!=""}[1m]))
 2. `1860` 입력 → **Load** → **Import**
 3. 데이터소스 선택 칸이 없는 건 정상. 최신 버전은 Grafana의 **기본(default) 데이터소스**를 자동으로 사용
 
-![1860 가져오기](images/1102/08-grafana-import-1860.png)
+![1860 가져오기](screenshots/1102/08-grafana-import-1860.png)
 
-![Node Exporter Full](images/1102/09-node-exporter-full-1860.png)
+![Node Exporter Full](screenshots/1102/09-node-exporter-full-1860.png)
 
 **화면 해석**
 
@@ -485,11 +510,11 @@ sum by (image) (rate(container_cpu_usage_seconds_total{name!=""}[1m]))
 
 `rate(container_cpu_usage_seconds_total{name!=""}[1m])` 결과가 비어 있음
 
-![컨테이너 쿼리 결과 없음](images/1102/03-container-query-empty.png)
+![컨테이너 쿼리 결과 없음](screenshots/1102/03-container-query-empty.png)
 
 조건을 빼고 조회하니 컨테이너 이름 없이 큰 묶음 4개(`/`, `/docker`, `/init.scope`, `/.lxc`)만 존재
 
-![name 라벨 없음](images/1102/04-cadvisor-no-name-label.png)
+![name 라벨 없음](screenshots/1102/04-cadvisor-no-name-label.png)
 
 해결까지 세 단계를 거침.
 
@@ -524,7 +549,7 @@ Registration of the docker container factory failed:
 unable to create containerd client: ... dial unix /run/containerd/containerd.sock: no such file or directory
 ```
 
-![cAdvisor 0.56.1 containerd 에러](images/1102/05-cadvisor-0.56.1-containerd-error.png)
+![cAdvisor 0.56.1 containerd 에러](screenshots/1102/05-cadvisor-0.56.1-containerd-error.png)
 
 - 새 cAdvisor는 containerd에 **직접 접속**하는데, 기본 위치(`/run/containerd/containerd.sock`, 별도 설치된 containerd 위치)에서 소켓을 못 찾음
 - Docker에 딸린 containerd는 다른 위치에 소켓을 둠 → cAdvisor 컨테이너 안에서 실제 위치 찾기:
@@ -534,7 +559,7 @@ docker compose exec cadvisor find /var/run /run -name "containerd.sock" 2>/dev/n
 ```
 → `/run/docker/containerd/containerd.sock`
 
-![containerd 소켓 찾기](images/1102/06-find-containerd-sock.png)
+![containerd 소켓 찾기](screenshots/1102/06-find-containerd-sock.png)
 
 - cAdvisor **컨테이너 안에서** 찾은 이유: compose에서 `/var/run`을 마운트했으므로, cAdvisor 눈에 보이는 경로가 곧 설정에 써야 할 경로
 - compose에 옵션 추가:
@@ -557,7 +582,7 @@ docker compose exec cadvisor find /var/run /run -name "containerd.sock" 2>/dev/n
 - 새 설정을 `week1/prometheus.yml`에 만들었는데, Prometheus가 읽는 파일은 **`week1/prometheus/prometheus.yml`** (폴더 안)
 - compose에서 `./prometheus` **폴더**를 컨테이너의 `/etc/prometheus`로 연결했기 때문
 
-![cadvisor 타깃 없음](images/1102/01-targets-no-cadvisor.png)
+![cadvisor 타깃 없음](screenshots/1102/01-targets-no-cadvisor.png)
 *Targets에 cadvisor가 없음 — 예전 설정을 그대로 읽고 있었음*
 
 - **해결**:
