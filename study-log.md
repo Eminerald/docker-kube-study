@@ -7,6 +7,7 @@
 |---|---|---|
 | rev1 | 2026-10-30 (금) | 1주차 Day 1 ~ Day 2·3 |
 | rev2 | 2026-11-02 (월) | 1주차 Day 4 추가, 10/30 내용에 스크린샷 삽입 |
+| rev3 | 2026-11-03 (화) | 1주차 Day 5 추가 (알림), "추가로 해볼 수 있는 것" 섹션 신설 |
 
 ---
 
@@ -17,10 +18,10 @@
 | 1주차 | Day 1 | OrbStack, Ubuntu VM, kubectl/helm/k3d 설치 | 10/30 | 완료 |
 | 1주차 | Day 2·3 | Prometheus + node-exporter + Grafana, PromQL, 대시보드 | 10/30 | 완료 |
 | 1주차 | Day 4 | cAdvisor 컨테이너 지표, Node Exporter Full(1860) | 11/02 | 완료 |
-| 1주차 | Day 5 | Alertmanager + 알림 규칙 | | 예정 |
+| 1주차 | Day 5 | Alertmanager + 알림 규칙 (HighCPU, TargetDown 실습) | 11/03 | 완료 |
 | 2주차 | Day 1~5 | k3d 클러스터 + kube-prometheus-stack, 장애 실습 | | 예정 |
 
-**현재 구성 (최신)**: Prometheus v3.5.0 · node-exporter v1.9.1 · Grafana 12.1.0 · cAdvisor 0.56.1 (ghcr.io) — 최종 compose 파일은 [Day 4](#day-4--컨테이너-메트릭) 참고
+**현재 구성 (최신)**: Prometheus v3.5.0 · node-exporter v1.9.1 · Grafana 12.1.0 · cAdvisor 0.56.1 (ghcr.io) · Alertmanager v0.28.1 — 최종 compose 파일은 [Day 5](#day-5--알림-alertmanager) 참고
 
 ### 접속 주소 (로컬, `docker compose up -d` 상태에서)
 
@@ -361,7 +362,9 @@ Cannot connect to the Docker daemon at unix:///Users/seongjong/.docker/run/docke
 > **정리**: 서버가 느려지면 node-exporter로 이상을 감지하고, cAdvisor로 원인 컨테이너를 찾는다.
 > 쿠버네티스에서는 kubelet 안에 cAdvisor가 내장되어 같은 역할을 한다 (2주차에서 확인).
 
-#### 최종 docker-compose.yml
+#### docker-compose.yml (Day 4 시점)
+
+> 11/03 Day 5에서 Alertmanager가 추가됨 → 최종본은 아래 [Day 5](#day-5--알림-alertmanager) 참고
 
 ```yaml
 services:
@@ -421,7 +424,7 @@ volumes:
   - `privileged: true`, `/var/lib/docker` 마운트: 다른 컨테이너들의 정보를 들여다봐야 해서 높은 권한이 필요함. **모니터링 도구가 높은 권한을 갖는다는 점은 실제 서버에서 보안 검토 대상**
   - `command`의 containerd 옵션 두 줄: Docker 29 호환을 위해 필요 (아래 트러블슈팅 8 참고)
 
-#### 최종 prometheus/prometheus.yml
+#### prometheus/prometheus.yml (Day 4 시점)
 
 ```yaml
 global:
@@ -597,13 +600,335 @@ docker compose exec cadvisor find /var/run /run -name "containerd.sock" 2>/dev/n
 
 ---
 
+## 2026-11-03 (화) · Day 5
+
+### Day 5 · 알림 (Alertmanager)
+
+지금까지는 사람이 대시보드를 들여다봐야 이상을 알았다면, Day 5는 **조건을 걸어두고 넘으면 알려주게** 만드는 단계.
+
+#### 구조
+
+```
+Prometheus ──(규칙 평가)──▶ 조건 충족 시 알림 발생 ──▶ Alertmanager ──▶ 수신처(Slack, Discord 등)
+```
+
+| 도구 | 하는 일 | 알림이 보이는 곳 |
+|---|---|---|
+| **Grafana** | 그래프로 **보여주기** | ✕ (대시보드는 그림만 그림) |
+| **Prometheus** | 규칙으로 **판단하기** | http://localhost:9090/alerts |
+| **Alertmanager** | 알림을 묶고, 중복을 거르고, **전달하기** | http://localhost:9093 |
+
+#### 폴더 구조 (최종)
+
+```
+~/server-study/week1/
+├── docker-compose.yml
+├── prometheus/
+│   ├── prometheus.yml
+│   └── alert-rules.yml      ← 새로 추가 (prometheus 폴더 안!)
+└── alertmanager/
+    └── alertmanager.yml     ← 새로 추가
+```
+
+#### 최종 docker-compose.yml
+
+```yaml
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prom-data:/prometheus
+    ports: ["9090:9090"]
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+    ports: ["9100:9100"]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.56.1
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    command:
+      - --containerd=/run/docker/containerd/containerd.sock
+      - --containerd-namespace=moby
+    ports: ["8080:8080"]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager:/etc/alertmanager
+    ports: ["9093:9093"]
+
+volumes:
+  prom-data:
+  grafana-data:
+```
+
+#### 최종 prometheus/prometheus.yml
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+```
+
+- `rule_files` — 알림 규칙 파일 위치. `prometheus.yml`과 같은 폴더 기준 상대 경로
+- `alerting` — 알림을 넘겨줄 Alertmanager 주소. compose 서비스 이름(`alertmanager`)으로 접근
+- `evaluation_interval: 15s` — 규칙을 판단하는 주기. **기본값이 1분**이라 안 넣으면 조건을 넘고도 최대 1분 늦게 알아챔. 수집 주기(15초)에 맞춤
+
+#### prometheus/alert-rules.yml
+
+```yaml
+groups:
+  - name: node
+    rules:
+      - alert: HighCPU
+        expr: 100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[1m])) * 100) > 80
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU 사용률 80% 초과 (1분 지속)"
+
+      - alert: DiskAlmostFull
+        expr: 100 - node_filesystem_avail_bytes{mountpoint="/var/lib/docker"} / node_filesystem_size_bytes{mountpoint="/var/lib/docker"} * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "디스크 사용률 90% 초과"
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} 수집 대상이 응답하지 않음"
+```
+
+| 항목 | 의미 |
+|---|---|
+| `expr` | 이 쿼리 결과가 **참이면** 알림 후보. Day 2·3에서 만든 PromQL에 `> 80` 같은 조건을 붙인 것 |
+| `for` | 조건이 **이 시간 동안 계속** 참이어야 진짜 알림(Firing). 그 전까지는 Pending |
+| `labels.severity` | 심각도. 나중에 "critical은 Discord, warning은 이메일"처럼 **보낼 곳을 나누는 기준** |
+| `annotations.summary` | 알림 설명 문구. `{{ $labels.job }}`처럼 **템플릿**으로 실제 라벨 값을 끼워 넣을 수 있음 |
+
+**계획서에서 바꾼 점**
+- **디스크 알림을 `mountpoint="/var/lib/docker"`로** — 10/30 트러블슈팅 5에서 확인한 대로 `"/"`는 OrbStack에 없어서, 원래대로면 **에러 없이 영원히 안 울리는 알림**이 됨
+- **`TargetDown` 추가** — 실제 서버에서 가장 먼저 만드는 알림. 수집 대상이 죽으면 그 대상의 다른 알림이 전부 조용해지므로, **"감시 자체가 살아 있나"를 감시**
+- **`evaluation_interval: 15s` 추가** (위 설명 참고)
+
+#### alertmanager/alertmanager.yml
+
+```yaml
+route:
+  receiver: default
+receivers:
+  - name: default
+```
+
+수신처를 비워둔 **최소 설정**. 알림이 Alertmanager까지 도착하는지 화면에서 확인만 하는 단계 (Discord 연결은 아래 "추가로 해볼 수 있는 것" 참고)
+
+#### 반영 및 검사
+
+```bash
+cd ~/server-study/week1
+docker compose config --quiet
+docker compose up -d
+docker compose exec prometheus promtool check rules /etc/prometheus/alert-rules.yml
+docker compose restart prometheus
+docker compose ps
+```
+
+- `promtool check rules` — Prometheus 이미지 안에 들어 있는 검사 도구로 **규칙 파일 문법만 미리 확인**. `SUCCESS: 3 rules found`면 정상
+- `docker compose ps`에 alertmanager까지 **5개** 컨테이너가 Up이면 완료
+
+![규칙 3개 Inactive](screenshots/1103/01-alerts-inactive.png)
+*http://localhost:9090/alerts — `alert-rules.yml`의 규칙 3개가 모두 초록색 Inactive(조건 넘는 것 없음)*
+
+#### 실습 1 · CPU 부하로 HighCPU 울리기
+
+VM 코어가 15개라 **전체 평균 80%**를 넘기려면 코어 전부를 바쁘게 만들어야 함. 설치 없이 바로 되는 방법 사용:
+
+```bash
+docker run --rm --name cpu-load alpine sh -c 'for i in $(seq $(nproc)); do (while :; do :; done) & done; sleep 240'
+```
+
+- 코어 수(`nproc`)만큼 무한 반복을 동시에 돌리고 4분 뒤 자동 종료
+- 계획서의 `ubuntu + apt install stress-ng` 방식은 패키지 설치 시간이 걸려서 대체
+
+**상태 변화**
+
+| 시간(대략) | 상태 | 의미 |
+|---|---|---|
+| 0 ~ 1분 | 🟢 Inactive | `rate(...[1m])`이 1분 평균이라 CPU 값이 서서히 올라오는 중 |
+| 1분 전후 | 🟡 **Pending** | 80%를 넘었지만 `for: 1m` 동안 **계속 넘는지 지켜보는 중** |
+| 2분 전후 | 🔴 **Firing** | 1분 내내 넘어서 **진짜 알림 발생** → Alertmanager로 전송 |
+| 종료 후 | 🟢 Inactive | 부하가 사라지고 1분쯤 지나 원래대로 |
+
+![HighCPU Pending](screenshots/1103/02-highcpu-pending.png)
+*80%를 넘은 직후 — 노란색 Pending. 아직 알림을 보내지 않고 지켜보는 단계*
+
+![HighCPU Firing](screenshots/1103/03-highcpu-firing.png)
+*1분 동안 계속 넘어서 빨간색 Firing — 진짜 알림 발생*
+
+![Grafana CPU 급상승](screenshots/1103/04-grafana-cpu-spike.png)
+*같은 시간 Node Exporter Full의 CPU Basic 그래프. 13:15쯤 Busy User 87.8%까지 상승*
+
+**핵심 개념: `for: 1m`이 필요한 이유 (Day 5 완료 기준)**
+
+CPU가 80%를 넘은 **순간 바로 울리지 않고**, 노란색 Pending으로 1분 동안 "잠깐 튄 건지, 계속되는 건지"를 지켜본 뒤에야 Firing이 됐다. `for`가 없으면 `docker compose up` 때처럼 몇 초 튀는 순간마다 알림이 와서, 결국 아무도 알림을 안 보게 된다(알림 피로). **"진짜 문제일 때만 울리게 하는 장치"**다.
+
+#### 실습 2 · 수집기를 멈춰서 TargetDown 울리기
+
+```bash
+docker compose stop node-exporter
+```
+
+- CPU 부하 없이 알림을 울리는 방법 (맥 팬이 돌지 않음)
+- 멈춘 동안 서버 CPU·메모리·디스크 값이 수집되지 않아 **Grafana 그래프에 그 구간만 빈칸**이 생김. 에러 없이 **조용히 끊기기만** 하므로 알림이 없으면 아무도 모르고 지나감 → `TargetDown`이 필요한 이유
+
+![TargetDown Firing](screenshots/1103/05-targetdown-firing.png)
+*`for: 30s`라서 HighCPU보다 빨리 Firing. 규칙 정의의 `{{ $labels.job }}`이 실제 알림에서는 `node`로 바뀌어 "node 수집 대상이 응답하지 않음"으로 표시됨(템플릿)*
+
+![Alertmanager에 도착한 알림](screenshots/1103/06-alertmanager-targetdown.png)
+*http://localhost:9093 — `default` 수신처로 TargetDown 알림 도착. 시간 `04:29:54Z`는 UTC(`Z`)라 한국 시간 13:29:54*
+
+확인 후 원상복구:
+
+```bash
+docker compose start node-exporter
+```
+
+- `TargetDown`의 `for`를 30초로 짧게 잡은 이유: 수집기가 죽는 건 순간적으로 튀는 값이 아니라 **확실한 이상**이므로 빨리 알리는 게 맞음
+
+### 막혔던 것 / 궁금했던 것 (11/03)
+
+#### 10. CPU 부하 중 맥 팬이 너무 돌아서 중간에 끄기
+
+- 기존 터미널에서 `Ctrl+C`는 안 먹힐 수 있음 — 컨테이너 안에서 PID 1로 도는 `sh`가 종료 신호(SIGINT)를 무시하는 구조
+- **해결**: 새 터미널 창에서 강제 종료
+  ```bash
+  docker kill cpu-load
+  ```
+- 교훈: 부하 테스트는 **멈추는 방법을 먼저 알고** 시작할 것. 실제 서버에서는 다른 사용자에게도 영향이 가므로 더 중요
+
+#### 11. Firing(빨강)이 됐는데 알림이 아무 데도 안 뜸
+
+- **정상 동작.** Firing은 "Prometheus가 문제라고 **판단했다**"는 뜻이지 "누군가에게 **알렸다**"는 뜻이 아님
+- 흐름:
+  ```
+  CPU 80% 초과 → Prometheus: Pending → Firing → Alertmanager 도착 ✅
+                                                    ↓
+                                          수신처: 없음 → 여기서 끝 ❌
+  ```
+- `alertmanager.yml`에 수신처를 비워뒀기 때문. 맥 화면 팝업 같은 기능은 원래 없고, Prometheus·Alertmanager는 서버용이라 **Slack·Discord·이메일 같은 외부 채널**로 받는 게 기본
+- Grafana 대시보드에도 Prometheus 알림은 표시되지 않음 (역할 분리: Grafana는 보여주기만)
+
+---
+
+## 추가로 해볼 수 있는 것
+
+Day 5 기본 과제 이후 선택적으로 해볼 수 있는 확장 실습. 나중에 필요할 때 이 섹션만 보고 따라 할 수 있게 정리.
+
+### 1. Discord로 알림 받기
+
+Alertmanager는 Discord를 **정식 지원**(`discord_configs`, v0.28.1에 포함). 별도 프로그램 없이 웹후크 URL만 넣으면 됨.
+
+**웹후크 만들기**
+1. Discord에서 본인만 있는 서버 만들기 (왼쪽 `+` → 직접 만들기)
+2. 채널 이름 옆 ⚙ **채널 편집** → **연동** → **웹후크** → **새 웹후크**
+3. 이름을 `서버알림` 등으로 바꾸고 **웹후크 URL 복사**
+
+**alertmanager/alertmanager.yml**
+
+```yaml
+route:
+  receiver: discord
+receivers:
+  - name: discord
+    discord_configs:
+      - webhook_url: "<웹후크 URL>"
+        send_resolved: true
+```
+
+- `send_resolved: true` — 문제가 해결됐을 때 `RESOLVED` 메시지도 한 번 더 보냄
+- 반영: `docker compose restart alertmanager`
+- 테스트: `docker compose stop node-exporter` → 1분 뒤 Discord에 TargetDown 메시지 도착 확인 → `docker compose start node-exporter` → RESOLVED 메시지 확인
+
+> ⚠️ **웹후크 URL은 비밀번호와 같다.** URL을 아는 사람은 누구나 그 채널에 메시지를 보낼 수 있으므로, 이 저장소처럼 **공개된 곳에 실제 URL이 들어간 `alertmanager.yml`을 올리면 안 됨.** 일지에는 `<웹후크 URL>`처럼 가려서 기록.
+
+- 연구실에서 Slack을 쓴다면 `discord_configs` 대신 `slack_configs`로 몇 줄만 바꾸면 그대로 옮길 수 있음
+- 심각도별로 나누기: `route` 아래 `routes`에 `matchers: [severity="critical"]`를 두면 critical만 Discord, 나머지는 다른 곳으로 보낼 수 있음
+
+### 2. Silence (알림 잠시 끄기)
+
+- Alertmanager 화면 오른쪽 위 **New Silence**, 또는 알림 옆 **Silence** 버튼
+- 라벨 조건(예: `alertname="TargetDown"`)과 기간을 정하면 그동안 해당 알림을 보내지 않음
+- 용도: **서버 점검하느라 일부러 내릴 때** 알림이 쏟아지지 않게. 실제 서버 운영에서 자주 씀
+
+### 3. 컨테이너 부하로 "범인 찾기"
+
+- Day 4에서 건너뛴 실습. 특정 컨테이너 하나에만 부하를 걸고, node-exporter CPU 패널(서버 전체)과 cAdvisor 컨테이너별 그래프를 **나란히** 비교
+- 서버 전체 그래프로는 "바쁘다"만 보이고, 컨테이너별 그래프로 **누가** 바쁜지 찾는 흐름 확인
+
+---
+
 ## 다음에 할 것
 
-- [ ] **Day 5**: Alertmanager + 알림 규칙
-  - 디스크 알림은 `mountpoint="/var/lib/docker"`로 수정해서 작성 (계획서의 `mountpoint="/"`는 OrbStack에서 안 울림)
-  - 부하 생성은 `apt install` 없이 바로 쓸 수 있는 이미지(`polinux/stress` 등) 사용
-  - 완료 기준: `for: 1m`이 왜 필요한지(순간 스파이크 무시) 설명
-- [ ] (선택) 컨테이너 부하 실습: `cpu-hog` 컨테이너를 띄워 node-exporter CPU 패널과 cAdvisor 컨테이너별 그래프 비교
+- [x] **Day 5**: Alertmanager + 알림 규칙 → 11/03 완료
+- [ ] **2주차 Day 1**: k3d 클러스터 만들기 (`k3d cluster create lab --agents 2`), 노드 3개 Ready 확인
+  - 시작 전 1주차 compose 스택은 `docker compose down`으로 내려서 리소스 확보 (볼륨은 남으므로 데이터·대시보드 유지)
+- [ ] (선택) "추가로 해볼 수 있는 것" — Discord 알림, Silence, 컨테이너 범인 찾기
 - [ ] (선택) CPU·메모리 패널 범례를 `CPU %`, `메모리 %`로 정리 (Options → Legend → Custom)
-- [ ] 1860 대시보드 JSON 내보내서 저장소에 보관
+- [ ] `week1 서버 모니터링`, 1860 대시보드 JSON 내보내서 저장소에 보관 (Export → Export as JSON)
 - [ ] Docker Desktop 자동 실행 끄기, `~/.zprofile` PATH 중복 정리
