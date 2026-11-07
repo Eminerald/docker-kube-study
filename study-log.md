@@ -8,6 +8,7 @@
 | rev1 | 2026-10-30 (금) | 1주차 Day 1 ~ Day 2·3 |
 | rev2 | 2026-11-02 (월) | 1주차 Day 4 추가, 10/30 내용에 스크린샷 삽입 |
 | rev3 | 2026-11-03 (화) | 1주차 Day 5 추가 (알림), "추가로 해볼 수 있는 것" 섹션 신설 |
+| rev4 | 2026-11-06 (금) | 2주차 Day 1~3 추가 (11/05~11/06), 1주차 Grafana 쿠키 이름 변경 반영, 접속 주소에 2주차 추가 |
 
 ---
 
@@ -19,21 +20,37 @@
 | 1주차 | Day 2·3 | Prometheus + node-exporter + Grafana, PromQL, 대시보드 | 10/30 | 완료 |
 | 1주차 | Day 4 | cAdvisor 컨테이너 지표, Node Exporter Full(1860) | 11/02 | 완료 |
 | 1주차 | Day 5 | Alertmanager + 알림 규칙 (HighCPU, TargetDown 실습) | 11/03 | 완료 |
-| 2주차 | Day 1~5 | k3d 클러스터 + kube-prometheus-stack, 장애 실습 | | 예정 |
+| 2주차 | Day 1 | k3d 클러스터(노드 3개), 파드 배치·자동 복구 | 11/05 | 완료 |
+| 2주차 | Day 2 | kube-prometheus-stack(차트 92.18.0), Operator, requests/limits | 11/05~06 | 완료 |
+| 2주차 | Day 3 | podinfo + ServiceMonitor, `release: kps` 라벨 실험 | 11/06 | 완료 |
+| 2주차 | Day 4 | 장애 실습 (CrashLoopBackOff, OOMKilled, 노드 장애) | | 예정 |
+| 2주차 | Day 5 | 정리 (구성도, 교수님 보고용 요약) | | 예정 |
 
 **현재 구성 (최신)**: Prometheus v3.5.0 · node-exporter v1.9.1 · Grafana 12.1.0 · cAdvisor 0.56.1 (ghcr.io) · Alertmanager v0.28.1 — 최종 compose 파일은 [Day 5](#day-5--알림-alertmanager) 참고
 
-### 접속 주소 (로컬, `docker compose up -d` 상태에서)
+**2주차 구성**: k3d 클러스터 `lab` (k3s v1.35.5, server 1 + agent 2) · kube-prometheus-stack 92.18.0 (`monitoring` namespace) · podinfo 6.7.1 (`default` namespace) — [2주차](#2주차--쿠버네티스-위로-옮기기) 참고
+
+### 접속 주소 — 1주차 (로컬, `docker compose up -d` 상태에서)
 
 | 서비스 | 주소 | 용도 |
 |---|---|---|
 | Prometheus | http://localhost:9090 | PromQL 쿼리 (Query 탭) |
 | Prometheus Targets | http://localhost:9090/targets | 수집 대상 UP/DOWN 확인 |
 | Prometheus Alerts | http://localhost:9090/alerts | 알림 규칙 상태 (Day 5) |
-| Grafana | http://localhost:3000 | 대시보드 (admin / admin) |
+| Grafana | http://localhost:3000 | 대시보드 (첫 로그인 admin / admin → 변경 권장) |
 | node-exporter | http://localhost:9100/metrics | 호스트 지표 원본 |
 | cAdvisor | http://localhost:8080 | 컨테이너 지표 웹 UI (`/metrics`는 원본) |
 | Alertmanager | http://localhost:9093 | 알림 수신 확인 (Day 5) |
+
+### 접속 주소 — 2주차 (port-forward를 켜둔 동안만)
+
+| 서비스 | port-forward 명령 (새 터미널 탭에서) | 주소 |
+|---|---|---|
+| Grafana | `kubectl port-forward -n monitoring svc/kps-grafana 3001:80` | http://localhost:3001 |
+| Prometheus | `kubectl port-forward -n monitoring svc/kps-kube-prometheus-stack-prometheus 9091:9090` | http://localhost:9091 |
+
+- 2주차 Grafana 비밀번호: `kubectl --namespace monitoring get secrets kps-grafana -o jsonpath="{.data.admin-password}" | base64 -d ; echo`
+- `localhost` 주소는 **이 맥에서만** 의미가 있음. 다른 컴퓨터에서 클릭하면 그 컴퓨터 자신을 가리켜서 열리지 않음. 반대로 1주차 포트는 `0.0.0.0`으로 열려 있어 **같은 와이파이의 다른 사람은 `맥IP:3000`으로 접근 가능** (아래 "추가로 해볼 수 있는 것" 4번)
 
 ### 참고 사이트
 
@@ -45,6 +62,8 @@
 | cAdvisor 저장소·릴리스 | https://github.com/google/cadvisor/releases |
 | cAdvisor × Docker 29 containerd-snapshotter 이슈 | https://github.com/google/cadvisor/issues/3643 |
 | kube-prometheus-stack 차트 (2주차) | https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack |
+| Prometheus Operator (ServiceMonitor 등) | https://prometheus-operator.dev |
+| podinfo | https://github.com/stefanprodan/podinfo |
 | k3d | https://k3d.io |
 | OrbStack | https://orbstack.dev |
 
@@ -659,6 +678,8 @@ services:
   grafana:
     image: grafana/grafana:12.1.0
     restart: unless-stopped
+    environment:
+      - GF_AUTH_LOGIN_COOKIE_NAME=grafana_session_week1   # 11/06 추가 (트러블슈팅 14)
     ports: ["3000:3000"]
     volumes:
       - grafana-data:/var/lib/grafana
@@ -876,6 +897,389 @@ docker compose start node-exporter
 
 ---
 
+## 2주차 · 쿠버네티스 위로 옮기기
+
+1주차에 Docker compose로 조립한 모니터링 스택을 **쿠버네티스(k3d) 위에서** 다시 구성한다. 1주차 스택은 내리지 않고 **포트를 나눠서 같이 띄워둔다.**
+
+### 포트 계획 (1주차와 같이 쓰기)
+
+| 서비스 | 1주차 (compose) | 2주차 (k3d) |
+|---|---|---|
+| Grafana | `localhost:3000` | `localhost:3001` (port-forward) |
+| Prometheus | `localhost:9090` | `localhost:9091` (port-forward) |
+| Alertmanager | `localhost:9093` | `localhost:9094` (필요할 때 port-forward) |
+
+- 포트 설정 `"3001:3000"`이나 `port-forward 3001:80`에서 **왼쪽이 맥 쪽 포트, 오른쪽이 컨테이너(서비스) 안 포트**. 왼쪽만 다르게 하면 겹치지 않음
+- `docker compose down`으로 1주차를 내려도 **볼륨은 남아서** 다시 `up -d` 하면 대시보드·수집 데이터가 돌아옴 (내려가 있던 동안만 그래프에 빈칸). Prometheus는 기본 **15일치**만 보관
+- OrbStack VM 메모리 12GB라 1주차(1GB 안쪽) + 2주차(2~3GB)를 같이 돌려도 여유 있음
+
+---
+
+## 2026-11-05 (목) · 2주차 Day 1 ~ Day 2(설치)
+
+### 2주차 Day 1 · k3d 클러스터
+
+#### 개념
+
+| 용어 | 뜻 | 1주차와 비교하면 |
+|---|---|---|
+| **클러스터** | 여러 대의 서버(노드)를 하나처럼 묶어 관리하는 단위 | compose는 맥 한 대 안에서만 동작 |
+| **노드** | 클러스터에 속한 서버 한 대 | — |
+| **server (control-plane)** | 클러스터의 두뇌. "어떤 컨테이너를 어느 노드에 띄울지" 결정 | — |
+| **agent (worker)** | 실제로 컨테이너가 돌아가는 일꾼 노드 | 맥 = 일꾼 하나뿐이었던 셈 |
+
+**k3d**는 노드들을 **Docker 컨테이너로 흉내 내는** 도구. 진짜 서버 3대 없이 맥 하나에서 "서버 3대짜리 클러스터"를 연습할 수 있다.
+
+#### 클러스터 만들기
+
+```bash
+k3d cluster create lab --agents 2
+kubectl config current-context
+kubectl get nodes
+docker ps
+kubectl get pods -A
+```
+
+- `--agents 2` — server 1 + agent 2, 노드 3개
+- `current-context`가 `k3d-lab`이어야 함. k3d가 kubectl이 이 클러스터를 보도록 자동 설정 (OrbStack 자체 쿠버네티스를 보고 있으면 `orbstack`으로 나옴)
+- 노드 3개 모두 **Ready** → 완료 기준 달성
+
+![k3d 노드와 시스템 파드](screenshots/1105/01-k3d-nodes-system-pods.png)
+*`docker ps`에 k3d 노드 3개가 1주차 컨테이너 5개와 나란히 보임. 아래는 클러스터가 스스로 띄운 시스템 파드*
+
+**`docker ps` 해석**
+- `k3d-lab-server-0`, `agent-0`, `agent-1` — 이미지가 전부 `rancher/k3s:v1.35.5-k3s1`. **같은 k3s 이미지로 만든 컨테이너 3개가 각각 서버 한 대 역할**
+- `k3d-lab-serverlb`의 `0.0.0.0:55228->6443` — 6443은 쿠버네티스 API 서버의 표준 포트. kubectl은 맥의 `55228`(k3d가 빈 포트를 골라 정함)로 명령을 보내고, 이게 server 노드의 6443으로 전달됨
+
+**`kubectl get pods -A` — 시스템 파드**
+
+| 파드 | 역할 |
+|---|---|
+| `coredns` | 클러스터 안의 DNS. 1주차에 compose가 해주던 **"서비스 이름으로 찾아가기"**를 담당 |
+| `traefik` | 바깥 요청을 클러스터 안 앱으로 연결해주는 출입구(Ingress) |
+| `svclb-traefik` ×3 | traefik용 출입구를 **노드마다 하나씩**. 노드가 3개라서 3개 |
+| `local-path-provisioner` | 파드가 데이터를 저장할 디스크 공간을 자동으로 마련 |
+| `metrics-server` | 노드·파드의 CPU/메모리 사용량을 간단히 보여줌 (`kubectl top`) |
+| `helm-install-traefik*` | traefik 설치하고 끝난 **일회성 작업**이라 `Completed`가 정상 |
+
+#### 앱 배치와 자동 복구
+
+```bash
+kubectl create deployment web --image=nginx:1.27 --replicas=3
+kubectl get pods -o wide
+kubectl top nodes
+```
+
+![nginx 배치와 노드 사용량](screenshots/1105/02-nginx-placement-top-nodes.png)
+*nginx 3개가 server-0, agent-1, agent-0에 하나씩 분산 배치. 중간의 `parse error`는 아래 트러블슈팅 12*
+
+- **스케줄러**가 노드들의 여유를 보고 3개를 **나눠** 배치. 1주차 compose는 맥 하나뿐이라 "어디에 띄울지" 고민할 필요가 없었음
+- **server-0(두뇌 노드)에도 앱이 올라감.** k3s는 기본적으로 허용하지만, 실제 운영 클러스터에서는 보통 두뇌 노드엔 앱을 안 올리도록 막아둠(taint). 두뇌가 바빠지면 클러스터 전체가 흔들리기 때문 → 학교 서버로 클러스터를 꾸릴 때 기억할 것
+- `kubectl top nodes` — server-0이 메모리 681Mi로 agent들(116~151Mi)보다 훨씬 많이 씀. API 서버·스케줄러·데이터 저장소 같은 **두뇌 역할**을 혼자 다 하기 때문. CPU `57m` = 0.057코어(1주차 cAdvisor의 밀리코어와 같은 단위)
+
+```bash
+kubectl delete pod web-5974c5bb9c-f8gkz
+kubectl get pods -o wide
+```
+
+![파드 삭제 후 자동 재생성](screenshots/1105/03-pod-recreate.png)
+*지운 `f8gkz` 대신 `79fzf`가 7초 만에 새로 생겨서 3개 유지. 빈자리였던 agent-1에 다시 배치*
+
+- Deployment에 "3개를 유지하라"고 **선언**해두면 쿠버네티스가 계속 그 상태를 맞춰줌. 1주차 compose의 `restart: unless-stopped`보다 한 단계 더 나간 개념
+- 파드 IP가 노드마다 대역이 다름 — server `10.42.0.x`, agent-0 `10.42.1.x`, agent-1 `10.42.2.x`. 쿠버네티스가 **노드마다 파드용 주소 구역을 나눠줌**
+
+정리: `kubectl delete deployment web`
+
+### 2주차 Day 2 · kube-prometheus-stack 설치
+
+1주차에 compose 파일로 **하나하나 조립했던** 모니터링 스택을 **Helm 차트 하나로** 한 번에 설치.
+
+| 1주차에서 직접 한 것 | kube-prometheus-stack이 대신 해주는 것 |
+|---|---|
+| Prometheus, Grafana, Alertmanager, node-exporter 각각 compose에 작성 | 전부 한 번에 설치 |
+| Grafana 데이터소스 직접 연결 | 자동 연결 |
+| 1860 대시보드 직접 가져오기 | 쿠버네티스용 대시보드 수십 개 기본 포함 |
+| 알림 규칙 직접 작성 | 기본 알림 규칙 100개 이상 포함 |
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm search repo prometheus-community/kube-prometheus-stack
+VER=$(helm search repo prometheus-community/kube-prometheus-stack | awk 'NR==2{print $2}')
+echo $VER
+helm install kps prometheus-community/kube-prometheus-stack -n monitoring --create-namespace --version "$VER"
+helm list -n monitoring
+kubectl get pods -n monitoring
+```
+
+- **차트 버전 92.18.0** (Operator v0.94.2)으로 설치. 1주차 이미지 버전 고정과 같은 원칙으로 차트도 버전을 정해서 설치
+- `awk 'NR==2{print $2}'` — "두 번째 줄의 두 번째 칸만 꺼내라". 첫 줄은 제목 줄
+- `kps` — 이번 설치(release)의 이름. 만들어지는 리소스 이름 앞에 `kps-`가 붙음
+- `-n monitoring --create-namespace` — `monitoring`이라는 **구역(namespace)**을 만들어 그 안에 설치. 1주차의 `week1` 폴더처럼 관련된 것끼리 묶는 단위
+
+![helm 설치와 monitoring 파드](screenshots/1105/05-helm-install-monitoring-pods.png)
+*차트 92.18.0 설치 완료. node-exporter가 노드 수만큼 3개*
+
+| 파드 | 1주차의 무엇에 해당 |
+|---|---|
+| `prometheus-kps-...-prometheus-0` | Prometheus |
+| `alertmanager-kps-...-alertmanager-0` | Alertmanager |
+| `kps-grafana-...` | Grafana |
+| `kps-prometheus-node-exporter-...` **×3** | node-exporter, **노드마다 하나씩** (DaemonSet). 노드가 늘면 자동으로 하나 더 붙음 |
+| `kps-kube-state-metrics-...` | 1주차엔 없던 것. "파드가 몇 개 떠 있나, 재시작 몇 번 했나" 같은 **쿠버네티스 상태**를 지표로 |
+| `kps-kube-prometheus-stack-operator-...` | 1주차엔 없던 것. 아래 Prometheus Operator |
+
+---
+
+## 2026-11-06 (금) · 2주차 Day 2(확인) ~ Day 3
+
+### 2주차 Day 2 (이어서) · Operator와 Grafana 접속
+
+#### Prometheus Operator
+
+```bash
+kubectl get prometheus,alertmanager,servicemonitor,prometheusrule -n monitoring
+```
+
+| 1주차 (compose) | 2주차 (Operator) |
+|---|---|
+| `prometheus.yml`의 `scrape_configs`에 수집 대상을 **직접 적음** | **ServiceMonitor** 리소스로 등록 |
+| `alert-rules.yml` 파일에 규칙 작성 | **PrometheusRule** 리소스로 등록 |
+| 설정 바꾸면 `docker compose restart prometheus` | **Operator가 알아서 감지해서 반영** |
+
+> **완료 기준 — Prometheus Operator가 하는 일 (한 문장)**
+> 사용자가 ServiceMonitor·PrometheusRule 같은 쿠버네티스 리소스로 "무엇을 감시하고 언제 알릴지"를 선언하면, Operator가 이를 감지해 Prometheus·Alertmanager 설정을 자동으로 만들고 반영해주는 관리자.
+
+1주차 Day 4에 `prometheus.yml`을 엉뚱한 위치에 저장해서 반영이 안 됐던 일 같은 게 구조적으로 안 생긴다.
+
+#### Grafana 접속 (포트 3001)
+
+```bash
+kubectl --namespace monitoring get secrets kps-grafana -o jsonpath="{.data.admin-password}" | base64 -d ; echo
+```
+
+- 쿠버네티스는 비밀번호 같은 값을 **Secret**에 저장. 저장할 때 base64로 **인코딩**하므로 `base64 -d`로 풀어서 봄. 암호화가 아니라 단순 인코딩이라, Secret 자체에 대한 **접근 권한 관리**가 중요
+
+새 터미널 탭에서 (켜져 있는 동안만 연결됨, `Ctrl+C` 하면 끊김):
+
+```bash
+kubectl port-forward -n monitoring svc/kps-grafana 3001:80
+```
+
+- 설치 안내에는 3000으로 나오지만 1주차 Grafana가 쓰고 있으므로 **3001**
+- http://localhost:3001 → `admin` / 위 비밀번호 → 대시보드 **Kubernetes / Compute Resources / Namespace (Pods)**
+
+![kube-system namespace](screenshots/1106/02-grafana-kube-system.png)
+*namespace를 `kube-system`으로 바꾼 화면. 시스템 파드별 CPU·메모리 사용량과 requests 대비 사용률*
+
+이 대시보드는 1주차 1860처럼 **서버 기준**이 아니라 **namespace → 파드 기준**으로 본다. 나중에 연구실별로 namespace를 나누면 연구실별 사용량을 이 화면으로 볼 수 있다.
+
+#### 핵심 개념: requests와 limits
+
+| | 뜻 | 비유 |
+|---|---|---|
+| **requests** | "최소 이만큼은 보장해줘" — 스케줄러가 노드를 고를 때 기준 | 식당 **예약 인원** |
+| **limits** | "이 이상은 절대 못 씀" — 넘으면 CPU는 느려지고, 메모리는 강제 종료(OOMKilled) | 식당 **최대 수용 인원** |
+
+- 위 화면의 **Memory Utilisation (from requests) 68.7%** = "예약해둔 메모리의 68.7%를 실제로 쓰는 중"
+- **CPU Quota 표**에서 `coredns`, `metrics-server`는 CPU Requests `0.100`이 있지만 `traefik`, `local-path-provisioner`, `svclb-traefik`은 **비어 있음**. requests 없는 파드는 스케줄러가 자원 계산에 넣지 못해 한 노드에 몰리거나 다른 파드 자원을 빼앗을 수 있음
+- **학교 서버 적용 포인트**: 여러 사람이 같이 쓰는 서버에서 requests/limits 없이 GPU 학습 작업을 올리면 메모리를 독점해 다른 사람 작업이 죽을 수 있음 → 공유 클러스터에서는 **"requests/limits 없는 파드는 못 올리게"** 강제하는 게 기본 (ResourceQuota, LimitRange). Day 4 OOMKilled 실습에서 limits를 직접 넘겨볼 예정
+
+#### 1주차 ↔ 쿠버네티스 대응표 (Day 2 체크 항목)
+
+| 1주차 (compose) | 2주차 (kube-prometheus-stack) |
+|---|---|
+| `prometheus.yml`의 `scrape_configs` | **ServiceMonitor** (수집 대상 하나당 하나) |
+| `alert-rules.yml` | **PrometheusRule** |
+| node-exporter 컨테이너 1개 | node-exporter **DaemonSet** (노드마다 자동으로 1개씩) |
+| compose의 prometheus 서비스 | **Prometheus** 리소스 → Operator가 실제 파드를 만들고 관리 |
+| `alertmanager.yml` | **Alertmanager** 리소스 + 설정 Secret |
+| Grafana 데이터소스 직접 연결 | 설치 시 **자동 연결** |
+| 1860 대시보드 직접 가져오기 | 쿠버네티스용 대시보드 **기본 포함** |
+| 설정 바꾸면 `docker compose restart` | Operator가 **변경을 감지해 자동 반영** |
+| (없음) | **kube-state-metrics** — 파드 개수, 재시작 횟수 등 쿠버네티스 상태를 지표로 |
+
+### 2주차 Day 3 · 내 앱 모니터링 (ServiceMonitor)
+
+1주차에선 `prometheus.yml`에 수집 대상을 직접 적었다. 쿠버네티스에서는 **ServiceMonitor**를 만들면 Operator가 알아서 등록한다.
+
+#### ~/server-study/week2/podinfo.yaml
+
+**podinfo** — 쿠버네티스 실습용 작은 웹 앱. `/metrics`로 Prometheus용 지표를 내보냄.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: podinfo }
+  template:
+    metadata:
+      labels: { app: podinfo }
+    spec:
+      containers:
+        - name: podinfo
+          image: ghcr.io/stefanprodan/podinfo:6.7.1
+          ports:
+            - name: http
+              containerPort: 9898
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podinfo
+  namespace: default
+  labels: { app: podinfo }
+spec:
+  selector: { app: podinfo }
+  ports:
+    - name: http
+      port: 9898
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: podinfo
+  namespace: default
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels: { app: podinfo }
+  namespaceSelector:
+    matchNames: [default]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+```
+
+| 리소스 | 역할 | 1주차로 치면 |
+|---|---|---|
+| **Deployment** | podinfo 파드를 **2개** 유지 | compose의 서비스 정의 |
+| **Service** | 파드 2개를 하나의 이름(`podinfo`)으로 묶어 찾아갈 수 있게 | compose가 자동으로 해주던 서비스 이름 |
+| **ServiceMonitor** | "`app: podinfo` 라벨 붙은 Service의 `/metrics`를 15초마다 수집해라" | `prometheus.yml`에 job 추가 |
+
+**계획서에서 바꾼 점**
+- 이미지 `latest` → **`6.7.1`로 고정**
+- **`resources`(requests/limits) 추가** — "최소 0.05코어·64MB 보장, 최대 0.2코어·128MB까지". 앞으로 올리는 앱은 비워두지 않기로 함
+
+```bash
+mkdir -p ~/server-study/week2 && cd ~/server-study/week2
+kubectl apply -f podinfo.yaml
+kubectl get pods -o wide
+kubectl get servicemonitor -A
+```
+
+#### Prometheus 화면 (포트 9091)
+
+새 터미널 탭에서:
+
+```bash
+kubectl port-forward -n monitoring svc/kps-kube-prometheus-stack-prometheus 9091:9090
+```
+
+http://localhost:9091/targets
+
+![podinfo 수집 대상 2개 UP](screenshots/1106/03-targets-podinfo-up.png)
+*`serviceMonitor/default/podinfo/0` — 파드 2개 = 수집 대상 2개, 모두 UP. `prometheus.yml`은 한 줄도 안 건드리고 재시작도 안 함*
+
+- **라벨이 1주차보다 훨씬 많음**: `namespace`, `pod`, `service`, `container`가 **자동으로** 붙음 → "default 구역 podinfo 파드 중 dhd48이 이상하다"처럼 쿠버네티스 구조 그대로 추적 가능
+- IP `10.42.0.11`(server-0), `10.42.1.7`(agent-0) — 파드 2개가 서로 다른 노드에 있음을 IP로도 알 수 있음
+- **"Hiding 4 empty pools"** — `kube-scheduler`, `kube-controller-manager`, `kube-etcd`, `kube-proxy`. k3s는 이 두뇌 부품들을 **하나의 프로그램으로 합쳐** 돌려서 차트가 따로 찾을 **대상이 없음**. 고장이 아니라 환경 차이 (이 때문에 Alerts에 `KubeSchedulerDown` 같은 알림이 떠 있을 수 있음)
+
+#### 실험: `release: kps` 라벨을 지우면?
+
+Prometheus가 **어떤 ServiceMonitor만 골라 보는지** 확인:
+
+```bash
+kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.serviceMonitorSelector}'; echo
+```
+
+→ `{"matchLabels":{"release":"kps"}}` = **`release: kps` 라벨이 붙은 ServiceMonitor만 수집**
+
+라벨 떼기 (라벨 이름 뒤 `-` = 삭제):
+
+```bash
+kubectl label servicemonitor podinfo release-
+```
+
+![라벨 삭제 후 podinfo 사라짐](screenshots/1106/04-label-removed-podinfo-gone.png)
+*1~2분 뒤 Targets에서 podinfo가 사라지고 맨 위가 바로 kps-grafana. `kubectl get servicemonitor podinfo`로 보면 ServiceMonitor 자체는 그대로 있음*
+
+다시 붙이기:
+
+```bash
+kubectl label servicemonitor podinfo release=kps
+```
+
+![라벨 복구 후 podinfo 복귀](screenshots/1106/05-label-restored-podinfo-back.png)
+*다시 2 / 2 up*
+
+> **완료 기준 — 새 서비스를 모니터링에 추가하는 절차**
+> 1. 앱의 Service에 라벨을 붙인다 (`app: podinfo`)
+> 2. 그 라벨을 고르는 ServiceMonitor를 만들고, **`release: kps` 라벨을 꼭 붙인다**
+> 3. `kubectl apply` 후 1~2분 뒤 Prometheus Targets에서 UP 확인
+>
+> 라벨을 빼먹으면 **에러 없이 조용히 수집이 안 된다** — 1주차 디스크 알림(`mountpoint="/"`)과 같은 유형의 함정
+
+### 막혔던 것 / 해결 방법 (11/05 ~ 11/06)
+
+#### 12. `<파드이름>`, `<버전>`을 그대로 입력해서 `parse error`
+
+```
+zsh: parse error near `\n'
+```
+
+![자리 표시 꺾쇠 에러](screenshots/1105/04-helm-version-placeholder-error.png)
+
+- **원인**: 안내의 `< >`는 "여기에 실제 값을 넣으라"는 **자리 표시**였는데 그대로 입력함. zsh에서 `<`, `>`는 **파일 입출력 기호**라 문법 에러
+- 첫 시도의 `k3d-lab-agent-1`은 **노드** 이름이라 꺾쇠가 없어도 실패했을 것 (지울 대상은 `web-`으로 시작하는 **파드**)
+- **해결**: 꺾쇠 없이 실제 값 입력 (`kubectl delete pod web-5974c5bb9c-f8gkz`). 버전은 직접 옮겨 적는 대신 `VER=$(...)`로 명령 결과를 변수에 담아 사용
+- **교훈**: 문서의 자리 표시(`<...>`, `YOUR_...`)는 그대로 실행하지 않는다. 가능하면 명령으로 값을 꺼내 쓰면 오타도 줄어듦
+
+#### 13. Grafana 대시보드가 전부 No data
+
+![default namespace No data](screenshots/1106/01-grafana-default-no-data.png)
+
+- **원인**: 대시보드의 `namespace`가 `default`였는데, Day 1 끝에 `default`의 nginx(`web`)를 지워서 **파드가 하나도 없었음**
+- **해결**: `namespace` 드롭다운을 `kube-system` 또는 `monitoring`으로 변경
+- **교훈**: No data는 수집 고장일 수도 있지만 **볼 대상이 없어서**일 수도 있음. 대시보드 변수(위쪽 드롭다운)부터 확인
+- 참고: 시간축 `UTC` 표시 → 시간 선택 → Change time settings → Time zone `Browser Time`으로 한국 시간 표시
+
+#### 14. 1주차·2주차 Grafana가 서로 로그아웃시킴
+
+- 3000(1주차)에 로그인하면 3001(2주차)이 로그아웃되고, 반대도 마찬가지
+- **원인**: 브라우저는 로그인 쿠키를 **호스트 이름(`localhost`) 기준**으로 저장하고 **포트는 구분하지 않음**. 두 Grafana의 쿠키 이름이 똑같이 `grafana_session`이라 서로 덮어씀. 포트를 나누면 **네트워크로는** 분리되지만 **브라우저 쿠키는** 분리되지 않음
+- **임시 해결**: 한쪽을 `http://127.0.0.1:3001`로 접속 (`localhost`와 `127.0.0.1`은 같은 맥이지만 브라우저는 다른 호스트로 취급)
+- **근본 해결**: 1주차 Grafana의 쿠키 이름 변경 (`week1/docker-compose.yml`)
+  ```yaml
+    grafana:
+      image: grafana/grafana:12.1.0
+      restart: unless-stopped
+      environment:
+        - GF_AUTH_LOGIN_COOKIE_NAME=grafana_session_week1
+      ports: ["3000:3000"]
+      volumes:
+        - grafana-data:/var/lib/grafana
+  ```
+  `docker compose up -d` → Grafana만 다시 만들어지고 대시보드는 볼륨에 있어 유지. 둘 다 로그인 유지 확인
+- `GF_섹션_항목` 형식의 환경변수로 Grafana 설정(`grafana.ini`)을 바꿀 수 있음. `GF_AUTH_LOGIN_COOKIE_NAME` = `[auth]` 섹션의 `login_cookie_name`
+- **교훈**: 한 서버에 같은 웹 서비스를 여러 개 띄우거나 같은 도메인 아래 여러 서비스를 둘 때 똑같이 생기는 문제. 학교 서버에서도 주의
+
+---
+
 ## 추가로 해볼 수 있는 것
 
 Day 5 기본 과제 이후 선택적으로 해볼 수 있는 확장 실습. 나중에 필요할 때 이 섹션만 보고 따라 할 수 있게 정리.
@@ -921,14 +1325,28 @@ receivers:
 - Day 4에서 건너뛴 실습. 특정 컨테이너 하나에만 부하를 걸고, node-exporter CPU 패널(서버 전체)과 cAdvisor 컨테이너별 그래프를 **나란히** 비교
 - 서버 전체 그래프로는 "바쁘다"만 보이고, 컨테이너별 그래프로 **누가** 바쁜지 찾는 흐름 확인
 
+
+### 4. 접근 범위 좁히기 (포트 바인딩, 비밀번호)
+
+- 1주차 포트는 `0.0.0.0:3000`처럼 **모든 연결을 받도록** 열려 있어서, 어느 와이파이에 붙든 **같은 네트워크의 다른 사람이 `맥IP:3000`으로 접근 가능** (인터넷 바깥은 공유기가 막음). Prometheus·cAdvisor·Alertmanager는 로그인 화면조차 없음
+- 내 맥에서만 열리게: `ports: ["127.0.0.1:3000:3000"]`처럼 앞에 `127.0.0.1:`을 붙이고 `docker compose up -d`. 내가 `localhost`로 보는 건 그대로, 컨테이너끼리 통신도 영향 없음
+- Grafana 비밀번호를 `admin`에서 변경 (프로필 → Change password)
+- 같은 와이파이에서 남에게 보여줄 때: `ipconfig getifaddr en0`로 맥 IP 확인 → `http://그IP:3000` (127.0.0.1로 묶기 전 상태에서)
+- 학교 서버 운영 시: **누가 접속할 수 있는지(포트 바인딩, 비밀번호, 방화벽)**를 처음부터 정해두는 게 기본
 ---
 
 ## 다음에 할 것
 
-- [x] **Day 5**: Alertmanager + 알림 규칙 → 11/03 완료
-- [ ] **2주차 Day 1**: k3d 클러스터 만들기 (`k3d cluster create lab --agents 2`), 노드 3개 Ready 확인
-  - 시작 전 1주차 compose 스택은 `docker compose down`으로 내려서 리소스 확보 (볼륨은 남으므로 데이터·대시보드 유지)
-- [ ] (선택) "추가로 해볼 수 있는 것" — Discord 알림, Silence, 컨테이너 범인 찾기
-- [ ] (선택) CPU·메모리 패널 범례를 `CPU %`, `메모리 %`로 정리 (Options → Legend → Custom)
+- [x] **1주차 Day 1~5** → 10/30 ~ 11/03 완료
+- [x] **2주차 Day 1~3** → 11/05 ~ 11/06 완료
+- [ ] **2주차 Day 4 · 장애 실습**
+  - CrashLoopBackOff: `kubectl run crash --image=busybox --restart=Always -- sh -c "exit 1"`
+  - OOMKilled: 메모리 limits 128Mi를 넘기기 (설치 없이 바로 쓰는 부하 이미지 사용)
+  - 노드 장애: `docker stop k3d-lab-agent-1` → NotReady 전환 시각과 파드 재배치 시각을 **타임스탬프로 기록** (기본 약 5분 걸림) → `docker start k3d-lab-agent-1`
+  - PrometheusRule 직접 작성 (podinfo 파드가 모두 내려가면 알림) → `kubectl scale deploy podinfo --replicas=0`으로 테스트
+  - 완료 기준: 장애 상황별로 "어디서 먼저 보고, 어떤 명령으로 원인을 찾는지" 순서 정리 (`get pods` → `describe` → `logs --previous` → Grafana)
+- [ ] **2주차 Day 5 · 정리**: 구성도(1주차 compose vs 2주차 k8s), 교수님 보고용 한 페이지 요약, `k3d cluster delete lab`
+- [ ] (선택) "추가로 해볼 수 있는 것" — Discord 알림, Silence, 컨테이너 범인 찾기, 접근 범위 좁히기
+- [ ] (선택) CPU·메모리 패널 범례를 `CPU %`, `메모리 %`로 정리
 - [ ] `week1 서버 모니터링`, 1860 대시보드 JSON 내보내서 저장소에 보관 (Export → Export as JSON)
 - [ ] Docker Desktop 자동 실행 끄기, `~/.zprofile` PATH 중복 정리
