@@ -9,6 +9,7 @@
 | rev2 | 2026-11-02 (월) | 1주차 Day 4 추가, 10/30 내용에 스크린샷 삽입 |
 | rev3 | 2026-11-03 (화) | 1주차 Day 5 추가 (알림), "추가로 해볼 수 있는 것" 섹션 신설 |
 | rev4 | 2026-11-06 (금) | 2주차 Day 1~3 추가 (11/05~11/06), 1주차 Grafana 쿠키 이름 변경 반영, 접속 주소에 2주차 추가 |
+| rev5 | 2026-11-10 (화) | 11/09 재부팅 후 복구(start.sh), 2주차 Day 4 장애 실습 추가 |
 
 ---
 
@@ -23,7 +24,8 @@
 | 2주차 | Day 1 | k3d 클러스터(노드 3개), 파드 배치·자동 복구 | 11/05 | 완료 |
 | 2주차 | Day 2 | kube-prometheus-stack(차트 92.18.0), Operator, requests/limits | 11/05~06 | 완료 |
 | 2주차 | Day 3 | podinfo + ServiceMonitor, `release: kps` 라벨 실험 | 11/06 | 완료 |
-| 2주차 | Day 4 | 장애 실습 (CrashLoopBackOff, OOMKilled, 노드 장애) | | 예정 |
+| — | 재부팅 | 재부팅 후 다시 켜기 (`start.sh`, `restart-guide.md`) | 11/09 | 완료 |
+| 2주차 | Day 4 | 장애 실습 (CrashLoopBackOff, OOMKilled, 노드 장애, PrometheusRule) | 11/10 | 완료 |
 | 2주차 | Day 5 | 정리 (구성도, 교수님 보고용 요약) | | 예정 |
 
 **현재 구성 (최신)**: Prometheus v3.5.0 · node-exporter v1.9.1 · Grafana 12.1.0 · cAdvisor 0.56.1 (ghcr.io) · Alertmanager v0.28.1 — 최종 compose 파일은 [Day 5](#day-5--알림-alertmanager) 참고
@@ -41,6 +43,8 @@
 | node-exporter | http://localhost:9100/metrics | 호스트 지표 원본 |
 | cAdvisor | http://localhost:8080 | 컨테이너 지표 웹 UI (`/metrics`는 원본) |
 | Alertmanager | http://localhost:9093 | 알림 수신 확인 (Day 5) |
+
+> 재부팅 후 다시 켜기: `~/server-study/start.sh` 한 번 실행 (자세한 내용은 `restart-guide.md`, [11/09](#2026-11-09-월--재부팅-후-다시-켜기))
 
 ### 접속 주소 — 2주차 (port-forward를 켜둔 동안만)
 
@@ -1280,6 +1284,398 @@ zsh: parse error near `\n'
 
 ---
 
+## 2026-11-09 (월) · 재부팅 후 다시 켜기
+
+주말에 맥을 끄면서 터미널 창과 port-forward가 모두 꺼졌다. 다시 켤 때 쓰는 명령과 주소를 **`restart-guide.md`**(메모)와 **`~/server-study/start.sh`**(한 번에 실행하는 스크립트)로 따로 정리했다.
+
+### 재부팅하면 무엇이 자동으로 돌아오나
+
+| 대상 | 재부팅 후 | 이유 |
+|---|---|---|
+| 1주차 컨테이너 5개 | ✅ 자동 | compose의 `restart: unless-stopped` |
+| k3d 노드 3개 | ✅ 자동 (안 되면 `k3d cluster start lab`) | k3d 노드 컨테이너도 재시작 정책이 있음 |
+| 2주차 파드들 | ✅ 자동, 단 **1~3분 걸림** | 노드가 켜진 뒤 파드가 차례로 다시 뜸 |
+| 2주차 port-forward (3001, 9091) | ❌ **매번 직접** | 터미널에서 실행 중인 명령이라 창이 꺼지면 같이 꺼짐 |
+
+![재부팅 후 상태](screenshots/1109/01-after-reboot-status.png)
+*1주차 컨테이너·k3d 노드 모두 Up, 노드 3개 Ready. 그런데 monitoring 파드들의 RESTARTS 옆이 `110s ago`, `2m42s ago` — 막 다시 뜬 참이었음 (트러블슈팅 15)*
+
+### start.sh (최종)
+
+```bash
+#!/bin/zsh
+PIDFILE=~/server-study/.port-forward.pids
+
+open -a OrbStack
+until docker info >/dev/null 2>&1; do sleep 2; done
+
+cd ~/server-study/week1 && docker compose up -d
+k3d cluster start lab
+kubectl config use-context k3d-lab >/dev/null
+kubectl get nodes
+
+sleep 15
+kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=grafana -n monitoring --timeout=300s
+kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=prometheus -n monitoring --timeout=300s
+
+if [ -f "$PIDFILE" ]; then kill $(cat "$PIDFILE") 2>/dev/null; rm -f "$PIDFILE"; fi
+pkill -f "kubectl port-forward" 2>/dev/null
+sleep 1
+
+( while true; do kubectl port-forward -n monitoring svc/kps-grafana 3001:80 >/dev/null 2>&1; sleep 3; done ) &
+echo $! >> "$PIDFILE"
+( while true; do kubectl port-forward -n monitoring svc/kps-kube-prometheus-stack-prometheus 9091:9090 >/dev/null 2>&1; sleep 3; done ) &
+echo $! >> "$PIDFILE"
+```
+
+| 부분 | 하는 일 |
+|---|---|
+| `until docker info ...` | OrbStack이 켜져서 Docker가 응답할 때까지 2초마다 확인 |
+| `kubectl wait --for=condition=Ready` | Grafana·Prometheus 파드가 **준비될 때까지 기다림** (최대 5분). 11/09 수정의 핵심 |
+| `while true; do kubectl port-forward ...; sleep 3; done &` | port-forward가 끊기면 **3초 뒤 자동 재연결**. 끝의 `&`는 창 뒤에서 돌게 함 |
+| `PIDFILE`, `pkill` | 스크립트를 다시 실행하면 **이전 연결을 먼저 정리**해서 충돌 방지 |
+
+- 처음 한 번: `chmod +x ~/server-study/start.sh` (실행 권한)
+- 스크립트를 실행한 **터미널 창을 닫으면 3001·9091이 끊김**
+- `~`는 홈 폴더(`/Users/seongjong`). Finder 사이드바엔 기본으로 안 보임 → `open ~/server-study`로 열고 사이드바에 끌어다 고정
+
+### 2주차 Grafana 기본 대시보드
+
+kube-prometheus-stack은 Grafana에 대시보드를 **20개 넘게** 같이 넣어준다. 1주차 Grafana(3000)엔 2개(`week1 서버 모니터링`, `Node Exporter Full`)뿐이라, 목록만 봐도 어느 Grafana인지 구분된다.
+
+![2주차 대시보드 목록](screenshots/1109/02-week2-dashboard-list.png)
+*태그 `kubernetes-mixin`, `node-exporter-mixin` 등 = 차트가 넣어준 대시보드 묶음*
+
+| 대시보드 | 무엇을 보나 |
+|---|---|
+| Kubernetes / Compute Resources / **Cluster** | 클러스터 전체 요약, namespace별 CPU·메모리 |
+| Kubernetes / Compute Resources / **Namespace (Pods)** | 구역 안의 파드별 사용량 |
+| Kubernetes / Compute Resources / **Node (Pods)** | 노드 하나에 어떤 파드가 올라가 자원을 쓰는지 |
+| Kubernetes / Compute Resources / **Pod** | 파드 하나를 컨테이너별로 자세히 |
+| Node Exporter / **Nodes** | 1주차 1860과 비슷한 서버 지표, 노드별 |
+| Node Exporter / **USE Method** / Cluster, Node | **U**tilization(얼마나 쓰나)·**S**aturation(얼마나 밀려 있나)·**E**rrors(에러) 기준으로 서버 상태 보기. 문제 찾기 출발점 |
+| Alertmanager / Overview, Prometheus / Overview, CoreDNS | 각 구성요소 자신의 상태 |
+| Kubernetes / Controller Manager, Scheduler, Proxy, etcd | k3s에서는 **비어 있음** (Day 3의 빈 풀 4개와 같은 이유) |
+| Node Exporter / AIX, MacOS | 다른 운영체제용. 무시 |
+
+![podinfo requests·limits 반영](screenshots/1109/03-podinfo-requests-limits.png)
+*`default` namespace. **CPU Quota 표의 Requests(0.05)·Limits(0.2) 칸이 채워짐** — 11/06 `kube-system`에선 비어 있던 칸. podinfo.yaml에 `resources`를 넣었기 때문에 "예약 대비 몇 % 쓰나"를 계산할 수 있게 됨. 파드 이름이 `dhd48` → `swrx8`로 바뀐 건 재부팅 때 새로 만들어졌기 때문 (Deployment가 2개 유지)*
+
+---
+
+## 2026-11-10 (화) · 2주차 Day 4 · 장애 실습
+
+일부러 고장을 내고 **"어디서 먼저 보고, 어떤 명령으로 원인을 찾는지"** 순서를 익힌다.
+
+### 실습 1 · CrashLoopBackOff
+
+**시작하자마자 죽는 앱.** 실제로는 설정 파일 오타, 접속할 DB가 없음, 프로그램 버그 등으로 자주 생긴다.
+
+```bash
+cd ~/server-study/week2
+kubectl run crash --image=busybox:1.36 --restart=Always -- sh -c "echo 앱 시작; sleep 5; echo 설정 파일을 찾을 수 없음; exit 1"
+kubectl get pods -w
+```
+
+- 5초 살아 있다가 에러 메시지를 남기고 `exit 1`(실패)로 종료. `--restart=Always`라 쿠버네티스가 계속 다시 살림
+- `-w`(watch): 상태가 바뀔 때마다 한 줄씩 새로 찍음. `Ctrl+C`로 멈춤
+
+![crash 지켜보기와 describe](screenshots/1110/01-crash-watch-describe.png)
+*Running → Error → Running → CrashLoopBackOff 반복. RESTARTS가 늘어남*
+
+**CrashLoopBackOff란**: 계속 실패하는 앱을 즉시 재시작하면 자원만 낭비하므로 **다시 살리기 전 기다리는 시간을 10초 → 20초 → 40초… 최대 5분까지** 늘린다. 그 "기다리는 상태"가 CrashLoopBackOff. 이번 실습에서 RESTARTS 7번째부터 `(5m2s ago)` — 최대치 5분 도달 확인
+
+#### 원인 찾기 4단계
+
+**① 무엇이 문제인가** — `kubectl get pods`
+
+**② 쿠버네티스가 본 상황** — `kubectl describe pod crash`
+
+![crash describe Events](screenshots/1110/02-crash-describe-events.png)
+
+- `State`, `Last State` 모두 **`Reason: Error`, `Exit Code: 1`** → 쿠버네티스가 죽인 게 아니라 **앱이 스스로 실패하고 나감**
+- `Started 10:52:12` → `Finished 10:52:17`: 우리가 넣은 `sleep 5` 그대로 5초 살다 죽음
+- `Events`: **`BackOff ... Back-off restarting failed container`** — 재시작 미루는 중
+- **`QoS Class: BestEffort`**: requests/limits가 없어서 붙은 등급. 노드 메모리가 부족해지면 **가장 먼저 쫓겨남**. requests를 준 podinfo는 `Burstable`
+- **`Tolerations: ... not-ready ... for 300s`** → 실습 3에서 파드 재배치에 5분이 걸리는 이유
+
+**③ 앱이 죽기 직전에 남긴 말** — `kubectl logs crash --previous`
+
+![logs --previous 성공](screenshots/1110/04-crash-logs-previous-ok.png)
+*`설정 파일을 찾을 수 없음` ← 진짜 원인. ①②만으로는 "죽는다"만 알 수 있고 **"왜"는 로그에서만** 나옴*
+
+- `--previous`: 지금 막 다시 살아난 컨테이너가 아니라 **직전에 죽은 컨테이너**의 로그. 앱이 다시 돌고 있는 순간엔 이게 없으면 방금 시작한 로그만 보임
+
+**④ 모니터링** — Prometheus Alerts의 `KubePodCrashLooping`
+
+![KubePodCrashLooping Pending](screenshots/1110/05-kubepodcrashlooping-pending.png)
+*kube-state-metrics가 만든 "CrashLoopBackOff로 대기 중" 지표를 보는 기본 알림. `for: 15m` — 15분 계속돼야 Firing. **`runbook_url`** = 이 알림이 울리면 어떻게 대응할지 적힌 매뉴얼 링크. 차트의 기본 알림마다 붙어 있음*
+
+- 이 알림은 실습 3(노드 장애) 중 kube-state-metrics가 5분간 꺼지면서 **지표가 끊겨 `for` 시계가 리셋**됐을 가능성이 있음 → 노드 장애가 **다른 알림까지 늦출 수 있다**
+
+### 실습 2 · OOMKilled
+
+**메모리 limits를 넘겨서 강제로 죽임당하는** 파드. 상한 128Mi에서 300MB를 쓰려고 함.
+
+```bash
+kubectl run oom --image=busybox:1.36 --restart=Never --overrides='{"spec":{"containers":[{"name":"oom","image":"busybox:1.36","command":["sh","-c","echo 메모리 300MB 사용 시도; dd if=/dev/zero of=/dev/null bs=300M count=1; echo 끝"],"resources":{"requests":{"memory":"64Mi"},"limits":{"memory":"128Mi"}}}]}}'
+kubectl get pods
+kubectl describe pod oom
+kubectl logs oom
+```
+
+- `dd ... bs=300M`: 300MB짜리 메모리 덩어리를 한 번에 잡아 채움. busybox에 기본으로 있어서 계획서의 `apt install stress-ng`보다 빠름
+- `--restart=Never`: 죽어도 다시 살리지 않아 **죽은 상태를 그대로** 관찰
+
+![oom describe](screenshots/1110/06-oom-describe.png)
+
+![oom logs](screenshots/1110/07-oom-logs.png)
+*`끝`이 찍히지 않음 — 할 말을 남길 틈도 없이 죽임당함*
+
+#### crash vs oom
+
+| | crash (실습 1) | oom (실습 2) |
+|---|---|---|
+| `Reason` | `Error` | **`OOMKilled`** |
+| `Exit Code` | `1` | **`137`** |
+| 누가 끝냈나 | 앱이 **스스로** 실패 | 메모리 limits를 넘어 **커널이 강제로 죽임** |
+| 로그 | 원인이 찍혀 있음 | 중간에 **끊김** |
+| 원인을 찾는 곳 | **`logs --previous`** | **`describe`의 Reason** |
+| QoS Class | BestEffort (requests/limits 없음) | Burstable (requests 64Mi < limits 128Mi) |
+
+- **Exit Code 137 = 128 + 9**. 9는 리눅스 강제 종료 신호(SIGKILL) 번호. 서버에서 137로 끝난 프로그램을 보면 **"누가 강제로 죽였다, 메모리 부족 의심"**
+- `Started`와 `Finished`가 같은 초(10:56:02) — 300MB를 잡으려는 순간 바로 죽음
+- **실제 대응**: 앱이 정말 그만큼 필요하면 limits를 올리고, 예상보다 많이 쓰면 앱을 고친다. 판단은 Grafana **Memory Usage** 패널의 평소 사용량으로. 학교 GPU 서버에서 학습 작업이 자꾸 죽을 때 가장 먼저 의심할 원인
+
+정리: `kubectl delete pod oom`
+
+### 실습 3 · 노드 장애
+
+agent 노드 하나를 통째로 꺼서 **서버 한 대가 죽었을 때** 쿠버네티스가 어떻게 하는지 본다.
+
+#### 어느 노드를 끌까
+
+![노드 장애 전 배치](screenshots/1110/08-placement-before-node-stop.png)
+
+| 노드 | 올라가 있는 것 | 끄면 |
+|---|---|---|
+| agent-1 | podinfo, **Grafana, Prometheus** | 지켜볼 화면(3001·9091)까지 죽음 |
+| **agent-0** ✅ | podinfo, Alertmanager, Operator, kube-state-metrics | Prometheus·Grafana가 살아 있어 **장애를 지켜볼 수 있음** |
+| server-0 | 두뇌 | **절대 끄지 않음** (클러스터 전체 멈춤) |
+
+#### 진행
+
+탭 3개: A `kubectl get nodes -w` / B `kubectl get pods -o wide -w` / C 장애 일으키기
+
+```bash
+date
+docker stop k3d-lab-agent-0
+```
+
+#### Prometheus가 쿠버네티스보다 먼저 알아챔
+
+![Targets DOWN](screenshots/1110/09-targets-down-agent0.png)
+*kubectl에는 agent-0의 podinfo(`zht65`)가 아직 `Running`인데, Prometheus Targets에선 이미 **DOWN** (`context deadline exceeded` = 10초 안에 대답 없음). Alertmanager도 같이 DOWN*
+
+- **kubectl은 쿠버네티스가 마지막으로 아는 상태**라 늦게 바뀌고, **Prometheus는 15초마다 직접 찔러보니까** 바로 안다. "kubectl에선 멀쩡한데 서비스가 안 된다"는 상황이 이렇게 생김 → **둘 다 볼 것**
+
+![TargetDown, Watchdog](screenshots/1110/10-alerts-targetdown-watchdog.png)
+
+- `TargetDown` **Pending (7)**: agent-0의 수집 대상 7개가 한꺼번에 응답 없음. 노드 하나가 죽으면 **알림이 여러 개 동시에** 터짐
+- **`Watchdog` Firing**: 장애 때문이 아니라 **항상 울리도록 만든 알림**. "알림 시스템이 살아 있다"는 신호라 오히려 **안 오면** 알림 시스템이 고장 난 것. 1주차 `TargetDown`처럼 "감시 도구를 감시"하는 발상
+
+#### NotReady 판정
+
+![노드 NotReady](screenshots/1110/11-nodes-notready.png)
+
+```bash
+kubectl describe node k3d-lab-agent-0 | grep -A 8 "Conditions"
+```
+
+![노드 Conditions](screenshots/1110/12-node-conditions-unknown.png)
+*`Ready`를 포함한 4개 항목이 전부 **`Unknown`**, 메시지 `Kubelet stopped posting node status`. 노드가 아무 보고도 못 하니 **죽었는지 바쁜지조차 모름**. 위쪽의 `agent-o`는 숫자 0 대신 영문 o를 친 오타 (트러블슈팅 18)*
+
+- **`LastTransitionTime 11:01:53`**: 쿠버네티스가 "연락 끊김"으로 판정한 정확한 시각. 화면을 보고 짐작하지 말고 여기서 꺼낼 것
+- `LastHeartbeatTime 10:59:22`가 노드를 끈 시각보다 이른 이유: 이건 **자세한 상태 보고서**를 보낸 마지막 시각이고(바뀐 게 없으면 몇 분에 한 번), "살아 있다" 신호는 따로 10초마다 보냄. 쿠버네티스는 그 신호가 약 50초 끊긴 걸 보고 판정
+
+#### 재배치
+
+![podinfo 재배치](screenshots/1110/13-podinfo-rescheduled.png)
+
+```
+podinfo-...-zht65   Terminating        agent-0   ← 300초 지나서 쫓겨남
+podinfo-...-rgdxr   Pending            <none>    ← 새 파드, 아직 갈 노드 미정
+podinfo-...-rgdxr   Pending            server-0  ← 스케줄러가 선택
+podinfo-...-rgdxr   ContainerCreating  server-0
+podinfo-...-rgdxr   Running            server-0  ← 1초 만에 실행
+```
+
+- 스케줄러가 agent-1(Prometheus·Grafana로 바쁨) 대신 **server-0** 선택
+- **1초 만에 Running**: server-0엔 예전에 podinfo가 돌아서 **이미지가 남아 있었음**
+- `zht65`는 **Terminating에서 멈춤**: agent-0이 꺼져 있어 실제로 지워졌는지 확인할 방법이 없음 → 노드가 돌아올 때까지 남음
+
+#### 타임라인
+
+| 시각 | 무슨 일 | 걸린 시간 |
+|---|---|---|
+| 11:01 초반 | `docker stop k3d-lab-agent-0` | — |
+| **11:01:53** | agent-0 **NotReady** | 약 **50초** |
+| **11:06:5x** | `zht65` Terminating → `rgdxr`가 server-0에서 Running | NotReady부터 약 **300초** |
+| 합계 | | **노드가 죽고 약 6분간 podinfo가 1개로만 서비스됨** |
+
+```
+노드 끔 ──(약 50초)──▶ NotReady ──(300초)──▶ 파드 쫓겨남 + 새 파드 생성
+```
+
+- **바로 안 옮기는 이유**: 네트워크가 잠깐 끊긴 것일 수도 있는데 그때마다 파드를 전부 옮기면 더 큰 혼란. 1주차 알림의 `for: 1m`과 같은 발상
+- **의미**: 앱을 1개만 띄우면 노드가 죽었을 때 **6분간 서비스가 완전히 멈춘다.** podinfo는 2개를 다른 노드에 둬서 그동안 `swrx8`이 버팀 → 중요한 서비스는 **최소 2개를 다른 노드에**
+
+#### 종류에 따라 반응이 다르다
+
+![monitoring 파드 상태](screenshots/1110/14-monitoring-alertmanager-stuck.png)
+
+| 파드 | 종류 | 결과 |
+|---|---|---|
+| Operator | Deployment | 옛 파드 Terminating → 새 파드 agent-1에서 Running |
+| kube-state-metrics | Deployment | 옛 파드 Terminating → 새 파드 server-0에서 Running |
+| **Alertmanager** | **StatefulSet** | **Terminating에서 멈춤, 새 파드 없음** |
+| node-exporter | DaemonSet | agent-0에 `Running`으로 표시된 채 그대로 |
+
+- **Deployment**: "몇 개 떠 있기만 하면 됨" → 옛 파드 확인 안 돼도 **새 이름으로 바로** 하나 더
+- **StatefulSet**: 파드마다 **고정된 이름(`-0`)과 자기 데이터**. 옛 파드가 정말 죽었는지 모르는데 같은 이름을 또 만들면 데이터가 꼬일 수 있어 **일부러 안 만듦** (안전을 위해 서비스를 포기)
+- **DaemonSet**: "노드마다 하나"라 옮길 이유가 없음
+- ⚠️ **그동안 Alertmanager가 하나도 없었다.** Prometheus는 알림을 Firing시키는데 **전달할 곳이 없음** → 노드가 죽었는데 **바로 그 장애 알림이 안 오는** 상황. 실제 운영에선 Alertmanager를 **2~3개를 여러 노드에** 둔다 (우리 설치는 기본값 1개)
+
+#### 노드 복구
+
+```bash
+docker start k3d-lab-agent-0
+kubectl get pods -A -o wide
+```
+
+![노드 복구 후](screenshots/1110/15-after-node-restore.png)
+
+1. Terminating으로 멈춰 있던 파드들이 **전부 사라짐** — agent-0이 돌아와 "지웠다"고 확인해줌
+2. **Alertmanager 다시 생성** (AGE 17s, agent-0) — 노드를 끈 11:01부터 **약 8분간 알림 전달이 멈춰 있었음**
+3. **podinfo `rgdxr`는 server-0에 그대로** — 노드가 돌아와도 **원래 자리로 안 돌아감**. 쿠버네티스는 잘 돌고 있는 파드를 굳이 옮기지 않음
+4. **새로 알게 된 것**: `kube-system`의 coredns, local-path-provisioner, metrics-server, traefik도 AGE `2m51s` → **이것들도 agent-0에 있다가 같이 옮겨짐**. 처음엔 `default`와 `monitoring`만 봐서 몰랐음 → 실제 장애 때는 `kubectl get pods -A -o wide`로 **그 노드에 있던 것 전부** 확인해야 영향 범위를 앎
+5. 결과적으로 **server-0(두뇌)에 앱이 몰리고 agent-0은 거의 빈** 불균형. 다시 퍼뜨리려면 `kubectl rollout restart deployment podinfo` (파드를 하나씩 새로 만들며 재배치)
+
+### 실습 4 · 알림 규칙 직접 만들기 (PrometheusRule)
+
+1주차 `alert-rules.yml`을 쿠버네티스 방식으로. **"podinfo가 전부 내려가면 알림"**
+
+#### ~/server-study/week2/podinfo-rules.yaml
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: podinfo-rules
+  namespace: default
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: podinfo
+      rules:
+        - alert: PodinfoDown
+          expr: absent(up{job="podinfo"} == 1)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "podinfo 파드가 하나도 응답하지 않음"
+```
+
+**계획서에서 바꾼 점: `expr`**
+- 계획서: `sum(up{job="podinfo"}) < 1` → **`--replicas=0`으로 테스트하면 안 울림**
+- 파드가 0개면 수집 대상 자체가 사라져 `up` 지표가 **아예 없어짐**. PromQL에서 **"값이 0"과 "값이 없음"은 다르다.** 없는 걸 더하면 0이 아니라 **빈 결과**, 빈 결과는 `< 1`과 비교도 안 돼서 조용히 넘어감 → 1주차 `mountpoint="/"`처럼 **에러 없이 영원히 안 울리는 알림**
+- `absent(up{job="podinfo"} == 1)`: **"살아 있는(up이 1인) podinfo가 하나도 없으면"** 참. 파드가 0개일 때도, 파드는 있는데 전부 응답 없을 때도 잡음
+
+**`release: kps` 라벨**: Day 3 ServiceMonitor와 같은 이유. Prometheus가 이 라벨 붙은 규칙만 읽음
+
+```bash
+kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'; echo
+kubectl apply -f podinfo-rules.yaml
+kubectl scale deployment podinfo --replicas=0
+kubectl scale deployment podinfo --replicas=2
+```
+
+![PodinfoDown Inactive](screenshots/1110/16-podinfodown-inactive.png)
+*apply 1분 뒤 등록 완료. 경로 `.../default-podinfo-rules-....yaml` = Operator가 PrometheusRule을 Prometheus용 규칙 파일로 바꿔 넣은 흔적. **재시작 없음***
+
+![PodinfoDown Pending](screenshots/1110/17-podinfodown-pending.png)
+
+![PodinfoDown Firing](screenshots/1110/18-podinfodown-firing.png)
+*replicas=0 → Pending → 1분 뒤 Firing. Value `1`은 `absent()`가 "없다"고 판단한 결과*
+
+- Alert labels가 `alertname`, `severity`뿐 — `absent()`는 "없는 것"을 알려주는 함수라 어느 파드인지 같은 라벨을 붙일 수 없음 → **알림 이름과 summary를 "무엇이 없어졌는지" 분명하게** 쓸 것
+
+### Day 4 완료 기준 · 장애별 원인 찾기 순서
+
+| 장애 | 먼저 보이는 곳 | `describe`에서 볼 것 | 원인이 나오는 곳 |
+|---|---|---|---|
+| **CrashLoopBackOff** | `get pods`: RESTARTS 증가 | `Reason: Error`, `Exit Code: 1` (앱이 스스로 종료) | **`logs --previous`** |
+| **OOMKilled** | `get pods`: `OOMKilled` | **`Reason: OOMKilled`, `Exit Code: 137`** | **`describe`** (로그엔 단서 없음) + Grafana Memory Usage |
+| **노드 장애** | **Prometheus Targets/Alerts가 먼저** (kubectl은 한동안 Running) | `describe node`: Conditions 전부 `Unknown` | `get pods -A -o wide`로 **그 노드에 있던 것 전부**. 약 6분 후 재배치 |
+| **앱 전체 중단** | **직접 만든 알림** (`PodinfoDown`) | — | `get deploy`, `get pods`로 replicas 확인 |
+
+**공통 순서**: `kubectl get pods` → `kubectl describe` → `kubectl logs --previous` → Grafana / Prometheus
+
+**교훈**
+- 로그에 단서가 없으면 `describe`의 **Reason부터**
+- kubectl은 **마지막으로 아는 상태**, Prometheus는 **직접 찔러본 상태**. 둘 다 볼 것
+- 중요한 서비스는 **2개 이상, 서로 다른 노드에**. 1개짜리 StatefulSet(Alertmanager)은 노드가 죽으면 그 노드가 돌아올 때까지 멈춤
+- 노드가 돌아와도 파드는 **원래 자리로 안 돌아감**
+- 알림 규칙은 **"값이 0"과 "값이 없음"을 구분** (`absent()`)
+- 노드 하나의 장애가 **모니터링 구성요소까지** 끌고 내려갈 수 있음 (kube-state-metrics → 다른 알림 지연, Alertmanager → 알림 전달 중단)
+
+정리: `kubectl delete pod crash`
+
+### 막혔던 것 / 해결 방법 (11/09 ~ 11/10)
+
+#### 15. 재부팅 후 3001·9091만 "서버에 연결할 수 없음"
+
+- 1주차(3000)는 정상, 노드도 Ready, monitoring 파드도 Running인데 2주차 화면만 안 열림
+- **원인**: 재부팅 직후 클러스터가 켜지면서 Grafana·Prometheus 파드가 다시 뜨는 데 1~3분 걸리는데, `start.sh`가 이를 기다리지 않고 port-forward를 바로 시작함. 연결할 파드가 준비 안 돼서 port-forward가 **에러를 내고 바로 꺼졌는데**, 에러 출력을 `>/dev/null`로 숨겨둬서 **조용히 실패**
+- 단서: monitoring 파드들의 RESTARTS 옆 `(110s ago)`, `(2m42s ago)` — 막 다시 뜬 참
+- **해결**: 파드가 다 뜬 뒤 `start.sh` 재실행 → 스크립트를 `kubectl wait`로 **준비될 때까지 기다리고**, 끊기면 **자동 재연결**하도록 수정 (위 start.sh)
+- **교훈**: 에러 출력을 숨기면 실패도 숨겨진다. 자동화 스크립트는 **"앞 단계가 정말 준비됐는지" 확인하고** 다음으로 넘어갈 것
+
+#### 16. 2주차 Grafana 비밀번호가 틀렸다고 나옴
+
+- 비밀번호는 설치 시 자동 생성되어 Secret에 저장됨. 제3자는 알 수 없고 명령으로 꺼내야 함
+  ```bash
+  kubectl --namespace monitoring get secrets kps-grafana -o jsonpath="{.data.admin-password}" | base64 -d ; echo
+  ```
+- 확인할 것
+  1. 주소가 **3001**인지 (3000에 2주차 비밀번호를 넣으면 당연히 틀림)
+  2. 옮겨 적다 틀리지 않게 **클립보드로 복사**: 위 명령의 `; echo` 대신 `| pbcopy` → `Cmd+V`
+  3. 예전에 Grafana 화면에서 비밀번호를 바꿨다면 Secret 값과 달라짐 (Grafana는 **처음 켜질 때만** Secret을 씀) → 파드 안에서 재설정
+     ```bash
+     kubectl exec -n monitoring deploy/kps-grafana -c grafana -- grafana cli --homepath /usr/share/grafana admin reset-admin-password studypass1234
+     ```
+
+#### 17. `kubectl logs crash --previous` → `unable to retrieve container logs`
+
+- **원인**: 명령이 틀린 게 아니라, 5초마다 죽고 살아나는 파드라 **쿠버네티스가 컨테이너를 정리하고 다시 띄우는 순간**에 걸림
+- **해결**: 한 번 더 실행하니 정상 출력. 재시작 대기(BackOff) 중일 땐 `--previous` 없이 `kubectl logs crash`로도 같은 내용이 나옴
+
+![logs --previous 실패](screenshots/1110/03-crash-logs-previous-fail.png)
+
+#### 18. `docker stop k3d-lab-agent-o` → `No such container`
+
+- 숫자 **0** 대신 영문 **o**를 입력. 서버 이름에 0과 o, 1과 l이 섞이면 자주 생기는 실수
+- **해결/예방**: 이름 몇 글자 치고 **`Tab` 키로 자동완성**
+
+#### 19. 터미널 조작 실수 두 가지
+
+- 지켜보기(`-w`)가 돌고 있는 탭에 명령을 치면 **실행되지 않고 화면에 글자만** 찍힘. `Ctrl+C`로 멈춘 뒤 줄에 남아 있으면 지우고 진행
+- `load: 1.62 cmd: kubectl ...` 줄은 새 탭 단축키 `Cmd+T` 대신 **`Ctrl+T`**를 누르면 나오는 맥 터미널 상태 표시. 무해
+
+---
+
 ## 추가로 해볼 수 있는 것
 
 Day 5 기본 과제 이후 선택적으로 해볼 수 있는 확장 실습. 나중에 필요할 때 이 섹션만 보고 따라 할 수 있게 정리.
@@ -1333,20 +1729,24 @@ receivers:
 - Grafana 비밀번호를 `admin`에서 변경 (프로필 → Change password)
 - 같은 와이파이에서 남에게 보여줄 때: `ipconfig getifaddr en0`로 맥 IP 확인 → `http://그IP:3000` (127.0.0.1로 묶기 전 상태에서)
 - 학교 서버 운영 시: **누가 접속할 수 있는지(포트 바인딩, 비밀번호, 방화벽)**를 처음부터 정해두는 게 기본
+
+### 5. 고가용성 맛보기 (Alertmanager 여러 개, 파드 고르게 퍼뜨리기)
+
+- Day 4 노드 장애에서 Alertmanager가 1개뿐이라 **약 8분간 알림 전달이 멈춤**. kube-prometheus-stack 설정값으로 replicas를 2로 올리고(`alertmanager.alertmanagerSpec.replicas=2`, `helm upgrade`) 같은 실험을 반복해 차이 확인
+- 노드 복구 후 server-0에 파드가 몰린 상태 → `kubectl rollout restart deployment podinfo`로 재배치, 또는 같은 앱 파드가 한 노드에 몰리지 않게 하는 설정(`topologySpreadConstraints`, `podAntiAffinity`) 실습
+- 두뇌 노드에 앱이 안 올라가게 막기(taint) — 실제 운영 클러스터 기본 설정
 ---
 
 ## 다음에 할 것
 
 - [x] **1주차 Day 1~5** → 10/30 ~ 11/03 완료
-- [x] **2주차 Day 1~3** → 11/05 ~ 11/06 완료
-- [ ] **2주차 Day 4 · 장애 실습**
-  - CrashLoopBackOff: `kubectl run crash --image=busybox --restart=Always -- sh -c "exit 1"`
-  - OOMKilled: 메모리 limits 128Mi를 넘기기 (설치 없이 바로 쓰는 부하 이미지 사용)
-  - 노드 장애: `docker stop k3d-lab-agent-1` → NotReady 전환 시각과 파드 재배치 시각을 **타임스탬프로 기록** (기본 약 5분 걸림) → `docker start k3d-lab-agent-1`
-  - PrometheusRule 직접 작성 (podinfo 파드가 모두 내려가면 알림) → `kubectl scale deploy podinfo --replicas=0`으로 테스트
-  - 완료 기준: 장애 상황별로 "어디서 먼저 보고, 어떤 명령으로 원인을 찾는지" 순서 정리 (`get pods` → `describe` → `logs --previous` → Grafana)
-- [ ] **2주차 Day 5 · 정리**: 구성도(1주차 compose vs 2주차 k8s), 교수님 보고용 한 페이지 요약, `k3d cluster delete lab`
-- [ ] (선택) "추가로 해볼 수 있는 것" — Discord 알림, Silence, 컨테이너 범인 찾기, 접근 범위 좁히기
-- [ ] (선택) CPU·메모리 패널 범례를 `CPU %`, `메모리 %`로 정리
+- [x] **2주차 Day 1~4** → 11/05 ~ 11/10 완료
+- [ ] `KubePodCrashLooping`이 Firing됐는지 확인 (노드 장애로 `for` 시계가 리셋됐는지) → 확인 후 `kubectl delete pod crash`
+- [ ] **2주차 Day 5 · 정리**
+  - 구성도 1장 (1주차 compose 구조 vs 2주차 k8s 구조)
+  - 설치 과정 요약 + 막혔던 부분 + 해결 방법 (이 문서의 트러블슈팅 1~19)
+  - 교수님 보고용 한 페이지 요약
+  - `k3d cluster delete lab` (정리 후 실습 클러스터 삭제 여부 결정)
+- [ ] (선택) "추가로 해볼 수 있는 것" — Discord 알림, Silence, 컨테이너 범인 찾기, 접근 범위 좁히기, 고가용성
 - [ ] `week1 서버 모니터링`, 1860 대시보드 JSON 내보내서 저장소에 보관 (Export → Export as JSON)
 - [ ] Docker Desktop 자동 실행 끄기, `~/.zprofile` PATH 중복 정리
