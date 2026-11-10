@@ -34,42 +34,52 @@
 
 ### 접속 주소 — 1주차 (로컬, `docker compose up -d` 상태에서)
 
-| 서비스 | 주소 | 용도 |
+| 서비스 | 주소 | 무엇을 보는 곳인가 |
 |---|---|---|
-| Prometheus | http://localhost:9090 | PromQL 쿼리 (Query 탭) |
-| Prometheus Targets | http://localhost:9090/targets | 수집 대상 UP/DOWN 확인 |
-| Prometheus Alerts | http://localhost:9090/alerts | 알림 규칙 상태 (Day 5) |
-| Grafana | http://localhost:3000 | 대시보드 (첫 로그인 admin / admin → 변경 권장) |
-| node-exporter | http://localhost:9100/metrics | 호스트 지표 원본 |
-| cAdvisor | http://localhost:8080 | 컨테이너 지표 웹 UI (`/metrics`는 원본) |
-| Alertmanager | http://localhost:9093 | 알림 수신 확인 (Day 5) |
+| Grafana | http://localhost:3000 | **대시보드 화면.** 직접 만든 `week1 서버 모니터링`(CPU·메모리·디스크)과 `Node Exporter Full`(1860)이 있음. 평소엔 여기만 보면 됨 (첫 로그인 admin / admin → 변경 권장) |
+| Prometheus | http://localhost:9090 | **수집한 데이터 창고.** Query 탭에서 PromQL을 직접 쳐서 숫자·그래프로 확인. 대시보드 만들기 전에 쿼리를 시험해보는 곳 |
+| Prometheus Targets | http://localhost:9090/targets | **수집 대상 목록.** node-exporter, cAdvisor 등이 UP(정상 수집)인지 DOWN(응답 없음)인지. 그래프가 비면 제일 먼저 볼 곳 |
+| Prometheus Alerts | http://localhost:9090/alerts | **알림 규칙 상태.** HighCPU·DiskAlmostFull·TargetDown이 Inactive(초록) / Pending(노랑, 지켜보는 중) / Firing(빨강, 알림 발생) 중 어디인지 |
+| Alertmanager | http://localhost:9093 | **알림 전달 담당.** Prometheus가 Firing시킨 알림이 실제로 도착했는지, 어느 수신처로 가는지. Silence(알림 잠시 끄기)도 여기서 |
+| cAdvisor | http://localhost:8080 | **컨테이너별 자원 사용량** 웹 화면. Prometheus를 거치지 않고 컨테이너 상태를 바로 볼 때 |
+| node-exporter | http://localhost:9100/metrics | **측정값 원본(텍스트).** Prometheus가 15초마다 가져가는 바로 그 내용. 사람이 볼 일은 거의 없고 "수집기가 살아 있나" 확인용 |
 
 > 재부팅 후 다시 켜기: `~/server-study/start.sh` 한 번 실행 (자세한 내용은 `restart-guide.md`, [11/09](#2026-11-09-월--재부팅-후-다시-켜기))
 
 ### 접속 주소 — 2주차 (port-forward를 켜둔 동안만)
 
-| 서비스 | port-forward 명령 (새 터미널 탭에서) | 주소 |
+| 서비스 | 주소 | 무엇을 보는 곳인가 |
 |---|---|---|
-| Grafana | `kubectl port-forward -n monitoring svc/kps-grafana 3001:80` | http://localhost:3001 |
-| Prometheus | `kubectl port-forward -n monitoring svc/kps-kube-prometheus-stack-prometheus 9091:9090` | http://localhost:9091 |
+| Grafana | http://localhost:3001 | **쿠버네티스용 대시보드 20여 개.** 클러스터·namespace·노드·파드별 CPU·메모리, requests/limits 대비 사용률. 시작은 `Kubernetes / Compute Resources / Cluster` |
+| Prometheus | http://localhost:9091 | 1주차 9090과 같은 역할 (PromQL 쿼리) — 쿠버네티스 클러스터 데이터 |
+| Prometheus Targets | http://localhost:9091/targets | **ServiceMonitor로 등록된 수집 대상.** podinfo가 2/2 UP인지, 노드 장애 때 무엇이 DOWN인지 |
+| Prometheus Alerts | http://localhost:9091/alerts | 차트 **기본 알림 100여 개 + 직접 만든 `PodinfoDown`**. `KubePodCrashLooping`, `TargetDown`, `Watchdog`(항상 울리는 정상 신호) 등 |
+
+port-forward 명령 (새 터미널 탭에서, 켜둔 동안만 연결 — 보통은 `start.sh`가 대신 해줌)
+
+```bash
+kubectl port-forward -n monitoring svc/kps-grafana 3001:80
+kubectl port-forward -n monitoring svc/kps-kube-prometheus-stack-prometheus 9091:9090
+```
 
 - 2주차 Grafana 비밀번호: `kubectl --namespace monitoring get secrets kps-grafana -o jsonpath="{.data.admin-password}" | base64 -d ; echo`
 - `localhost` 주소는 **이 맥에서만** 의미가 있음. 다른 컴퓨터에서 클릭하면 그 컴퓨터 자신을 가리켜서 열리지 않음. 반대로 1주차 포트는 `0.0.0.0`으로 열려 있어 **같은 와이파이의 다른 사람은 `맥IP:3000`으로 접근 가능** (아래 "추가로 해볼 수 있는 것" 4번)
 
 ### 참고 사이트
 
-| 주제 | 주소 |
-|---|---|
-| Prometheus 문서 | https://prometheus.io/docs/ |
-| Prometheus + cAdvisor 가이드 | https://prometheus.io/docs/guides/cadvisor/ |
-| Grafana 대시보드 1860 (Node Exporter Full) | https://grafana.com/grafana/dashboards/1860 |
-| cAdvisor 저장소·릴리스 | https://github.com/google/cadvisor/releases |
-| cAdvisor × Docker 29 containerd-snapshotter 이슈 | https://github.com/google/cadvisor/issues/3643 |
-| kube-prometheus-stack 차트 (2주차) | https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack |
-| Prometheus Operator (ServiceMonitor 등) | https://prometheus-operator.dev |
-| podinfo | https://github.com/stefanprodan/podinfo |
-| k3d | https://k3d.io |
-| OrbStack | https://orbstack.dev |
+| 사이트 | 주소 | 무엇이 있나 / 언제 보나 |
+|---|---|---|
+| Prometheus 공식 문서 | https://prometheus.io/docs/ | Prometheus 설정 항목, PromQL 문법·함수(`rate`, `absent` 등), 알림 규칙 작성법. 쿼리나 설정이 헷갈릴 때 |
+| Prometheus + cAdvisor 가이드 | https://prometheus.io/docs/guides/cadvisor/ | cAdvisor를 Docker로 띄워 Prometheus에 연결하는 공식 예제. 1주차 Day 4 참고 자료 |
+| Grafana 대시보드 1860 | https://grafana.com/grafana/dashboards/1860 | Node Exporter Full 대시보드 소개 페이지. 패널 구성, 버전별 변경 내역, Import용 ID |
+| cAdvisor 릴리스 | https://github.com/google/cadvisor/releases | cAdvisor 버전별 변경 내용과 이미지 주소. **ghcr.io 이전, 태그에 `v` 없음** 같은 정보를 여기서 확인 |
+| cAdvisor × Docker 29 이슈 | https://github.com/google/cadvisor/issues/3643 | 1주차 Day 4에 겪은 "Docker 29에서 컨테이너별 지표가 안 잡히는" 문제의 원인과 해결 논의 |
+| kube-prometheus-stack 차트 | https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack | 2주차에 설치한 Helm 차트. 바꿀 수 있는 설정값(`values.yaml`), 버전 업그레이드 시 주의사항. Alertmanager replicas 등 설정 바꿀 때 |
+| Prometheus Operator | https://prometheus-operator.dev | ServiceMonitor, PrometheusRule 같은 리소스의 작성법과 각 항목 설명. 새 서비스 등록·알림 규칙 만들 때 |
+| 알림 대응 매뉴얼 (runbooks) | https://runbooks.prometheus-operator.dev | 차트 기본 알림(`KubePodCrashLooping` 등)이 울렸을 때 **원인과 대응 방법**. 알림의 `runbook_url`이 가리키는 곳 |
+| podinfo | https://github.com/stefanprodan/podinfo | 2주차 실습용 예제 앱. 지원하는 기능(`/metrics` 등)과 이미지 버전 |
+| k3d | https://k3d.io | 맥에서 쿠버네티스 클러스터를 컨테이너로 띄우는 도구. 클러스터 만들기·시작·삭제 명령 |
+| OrbStack | https://orbstack.dev | 맥용 Docker·리눅스 VM 실행 앱. 설치 파일(dmg) 직접 다운로드도 여기서 |
 
 ---
 
